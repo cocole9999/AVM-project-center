@@ -1,0 +1,74 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Database
+*.db
+*.db-journal
+
+# Logs
+*.log
+out-*.log
+
+# Environment
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Test artifacts
+_t_*.txt
+_t_*.py
+_t*.py
+out-*.log
+final_e2e_*.py
+_cache_test.py
+_db_idx*.py
+_db_state.py
+_idx_*.py
+_users.py
+test_ui_*.py
+start_backend.py
+start_frontend.py
+build_zip.py
+*.log.err
+avm-demo/out-*.log
+avm-demo/backend/out-*.log
+
+# Temp / scratch
+tmp/
+logs/
+
+# Edge profile
+.edge-profile/
+
+# Docker volumes
+postgres-data/
+avm-data/
+
+# Vite
+.vite/
+
+# Uploads
+uploads/*
+!uploads/.gitkeep
+
+# Zip archives
+*.zip
+
+# ZCode internal
+.zcode/
+
+# Misc
+view.txt

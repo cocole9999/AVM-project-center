@@ -1,0 +1,22 @@
+#!/usr/bin/env sh
+# AVM pre-commit hook
+# 自动检测 frontend 中是否有未 import 的 React/antd 组件/图标
+# 漏 import 是 Vite HMR 阶段最常见的 ReferenceError 来源
+# (ThunderboltOutlined, Alert, ... 反复踩坑 5+ 次)
+#
+# 启用方式 (项目根目录执行):
+#   git init  # 如果还没有 git
+#   git config core.hooksPath .githooks
+# 或在 README 里加这一行:
+#   husky: npx husky install && npx husky add .husky/pre-commit "cd frontend && npm run lint"
+
+set -e
+cd "$(dirname "$0")/.."
+
+echo "🔍 AVM pre-commit: 检查 frontend import 完整性..."
+cd frontend
+if [ -f node_modules/.bin/.package-lock.json ] || [ -d node_modules ]; then
+  npm run lint --silent
+else
+  echo "  ⚠️  frontend/node_modules 不存在, 跳过 (请先 npm install)"
+fi

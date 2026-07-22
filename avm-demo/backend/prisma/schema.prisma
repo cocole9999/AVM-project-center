@@ -1,0 +1,1020 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model WorkItem {
+  id            String             @id @default(cuid())
+  type          String
+  key           String             @unique
+  title         String
+  description   String             @default("")
+  status        String
+  priority      String             @default("P2")
+  severity      String?
+  estimate      Float?
+  actualHours   Float?
+  storyPoints   Float?
+  planStart     DateTime?
+  planEnd       DateTime?
+  actualStart   DateTime?
+  actualEnd     DateTime?
+  assignee      String?
+  reporter      String
+  module        String?
+  labels        String             @default("")
+  spaceId       String?
+  iterationId   String?
+  parentId      String?
+  currentNodeId String?
+  // V1.7 客户/车型/项目 关联
+  projectId      String?
+  carModelId     String?
+  customerId     String?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  comments      Comment[]
+  reviews       Review[]
+  currentNode   FlowNode?          @relation("CurrentNode", fields: [currentNodeId], references: [id])
+  parent        WorkItem?          @relation("ParentChild", fields: [parentId], references: [id])
+  children      WorkItem[]         @relation("ParentChild")
+  iteration     Iteration?         @relation(fields: [iterationId], references: [id])
+  space         Space?             @relation(fields: [spaceId], references: [id])
+  project       Project?           @relation(fields: [projectId], references: [id])
+  dependencies ExternalDependency[]
+  carModel      CarModel?          @relation(fields: [carModelId], references: [id])
+  customer      Customer?          @relation(fields: [customerId], references: [id])
+  relatedTo     WorkItemRelation[] @relation("RelationTo")
+  relatedFrom   WorkItemRelation[] @relation("RelationFrom")
+
+  @@index([type])
+  @@index([status])
+  @@index([iterationId])
+  @@index([assignee])
+  @@index([projectId])
+  @@index([carModelId])
+  @@index([customerId])
+  @@index([parentId])
+  @@index([priority])
+  // V1.10 甘特图范围查询
+  @@index([planStart, planEnd])
+  @@index([projectId, planStart])
+}
+
+model WorkItemRelation {
+  id           String   @id @default(cuid())
+  fromId       String
+  toId         String
+  relationType String
+  createdAt    DateTime @default(now())
+  to           WorkItem @relation("RelationTo", fields: [toId], references: [id], onDelete: Cascade)
+  from         WorkItem @relation("RelationFrom", fields: [fromId], references: [id], onDelete: Cascade)
+
+  @@unique([fromId, toId, relationType])
+}
+
+model Iteration {
+  id        String     @id @default(cuid())
+  name      String     @unique
+  goal      String     @default("")
+  status    String     @default("planning")
+  startDate DateTime
+  endDate   DateTime
+  spaceId   String?
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  space     Space?     @relation(fields: [spaceId], references: [id])
+  workItems WorkItem[]
+}
+
+model Comment {
+  id         String   @id @default(cuid())
+  workItemId String
+  author     String
+  content    String
+  imageUrl   String?  // V1.23 评论图片附件 URL
+  reactions  String   @default("{}") // V1.28 评论 reactions: { "👍": ["user1", "user2"], "❤️": ["user3"] }
+  createdAt  DateTime @default(now())
+  workItem   WorkItem @relation(fields: [workItemId], references: [id], onDelete: Cascade)
+
+  @@index([workItemId])
+}
+
+model Activity {
+  id         String   @id @default(cuid())
+  workItemId String?
+  actor      String
+  action     String
+  field      String?
+  oldValue   String?
+  newValue   String?
+  meta       String?
+  createdAt  DateTime @default(now())
+
+  @@index([workItemId])
+  @@index([createdAt])
+}
+
+// V1.13 全系统审计日志（区别于 Activity：覆盖所有实体，PM 合规追溯用）
+model AuditLog {
+  id        String   @id @default(cuid())
+  entity    String   // 'project' | 'customer' | 'workItem' | 'carModel' | 'contact' | 'dependency' | 'user' | 'webhook' | 'automation' | 'import' | 'handover' | 'auth'
+  entityId  String   // 实体主键
+  action    String   // 'create' | 'update' | 'delete' | 'login' | 'logout' | 'import' | 'export' | 'status_change' | ...
+  actor     String   // 操作人 username (登录前为 'anonymous' / 'system')
+  actorRole String?  // 操作人角色
+  changes   String?  // JSON: [{field, oldValue, newValue}] (update 时用)
+  meta      String?  // JSON: 额外上下文 (ip / userAgent / summary)
+  createdAt DateTime @default(now())
+
+  @@index([entity, entityId])
+  @@index([actor])
+  @@index([createdAt])
+  @@index([action])
+  @@index([entity, createdAt])
+}
+
+model NodeFlow {
+  id          String           @id @default(cuid())
+  name        String
+  workType    String
+  description String           @default("")
+  version     Int              @default(1)
+  isActive    Boolean          @default(true)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  nodes       FlowNode[]
+  transitions FlowTransition[]
+
+  @@unique([workType, isActive])
+}
+
+model FlowNode {
+  id             String           @id @default(cuid())
+  flowId         String
+  name           String
+  nodeType       String           @default("normal")
+  description    String           @default("")
+  positionX      Float            @default(0)
+  positionY      Float            @default(0)
+  statusValue    String?
+  roles          String           @default("")
+  requiredFields String           @default("")
+  entryRule      String           @default("")
+  exitRule       String           @default("")
+  slaHours       Int?
+  dodItems       String           @default("")
+  reviewType     String?
+  reviewRule     String           @default("majority")
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  flow           NodeFlow         @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  incoming       FlowTransition[] @relation("ToNode")
+  outgoing       FlowTransition[] @relation("FromNode")
+  currentItems   WorkItem[]       @relation("CurrentNode")
+
+  @@index([flowId])
+}
+
+model FlowTransition {
+  id         String   @id @default(cuid())
+  flowId     String
+  fromNodeId String
+  toNodeId   String
+  condition  String   @default("")
+  label      String   @default("")
+  isDefault  Boolean  @default(false)
+  toNode     FlowNode @relation("ToNode", fields: [toNodeId], references: [id], onDelete: Cascade)
+  fromNode   FlowNode @relation("FromNode", fields: [fromNodeId], references: [id], onDelete: Cascade)
+  flow       NodeFlow @relation(fields: [flowId], references: [id], onDelete: Cascade)
+
+  @@index([flowId])
+}
+
+model Review {
+  id           String              @id @default(cuid())
+  workItemId   String
+  reviewType   String
+  title        String
+  status       String              @default("pending")
+  conclusion   String?
+  summary      String              @default("")
+  initiator    String
+  finalizer    String?
+  finalizedAt  DateTime?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  workItem     WorkItem            @relation(fields: [workItemId], references: [id], onDelete: Cascade)
+  items        ReviewItem[]
+  participants ReviewParticipant[]
+
+  @@index([workItemId])
+  @@index([status])
+}
+
+model ReviewItem {
+  id          String   @id @default(cuid())
+  reviewId    String
+  name        String
+  itemType    String   @default("score")
+  description String   @default("")
+  score       Int?
+  maxScore    Int      @default(5)
+  checked     Boolean?
+  answer      String?
+  comment     String   @default("")
+  completed   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now()) @updatedAt
+  review      Review   @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  @@index([reviewId])
+}
+
+model ReviewParticipant {
+  id           String    @id @default(cuid())
+  reviewId     String
+  userId       String
+  userName     String
+  role         String    @default("reviewer")
+  weight       Float     @default(1)
+  hasResponded Boolean   @default(false)
+  respondedAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @default(now()) @updatedAt
+  review       Review    @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  @@unique([reviewId, userId])
+}
+
+model ReviewTemplate {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  reviewType  String
+  description String   @default("")
+  items       String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model ChartConfig {
+  id          String     @id @default(cuid())
+  name        String
+  chartType   String
+  dimensions  String
+  measures    String
+  filters     String     @default("[]")
+  options     String     @default("{}")
+  source      String     @default("work_items")
+  scope       String     @default("global")
+  dashboardId String?
+  position    Int        @default(0)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  dashboard   Dashboard? @relation(fields: [dashboardId], references: [id])
+
+  @@index([dashboardId])
+}
+
+model Dashboard {
+  id          String        @id @default(cuid())
+  name        String
+  description String        @default("")
+  layout      String        @default("[]")
+  scope       String        @default("custom")
+  target      String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  charts      ChartConfig[]
+}
+
+model AIFieldConfig {
+  id          String   @id @default(cuid())
+  name        String
+  workType    String
+  targetField String
+  capability  String
+  prompt      String   @default("")
+  inputFields String   @default("")
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model AIRunLog {
+  id         String   @id @default(cuid())
+  configId   String
+  workItemId String?
+  input      String   @default("")
+  output     String   @default("")
+  success    Boolean  @default(true)
+  error      String?
+  durationMs Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  @@index([configId])
+}
+
+model User {
+  id            String    @id @default(cuid())
+  username      String    @unique
+  displayName   String
+  email         String?
+  password      String
+  department    String?
+  role          String    @default("member")
+  active        Boolean   @default(true)
+  token         String?   // V1.11 登录 token (32 字节 hex)
+  tenantId      String?
+  feishuOpenId  String?
+  feishuUnionId String?
+  dingtalkId    String?
+  wechatworkId  String?
+  ssoBound      Boolean   @default(false)
+  lastLoginAt   DateTime?
+  lastLoginIp   String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  tenant        Tenant?   @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+  @@index([feishuOpenId])
+  @@index([feishuUnionId])
+  @@index([token])
+}
+
+model Space {
+  id            String               @id @default(cuid())
+  name          String               @unique
+  code          String               @unique
+  description   String               @default("")
+  icon          String               @default("project")
+  status        String               @default("active")
+  ownerId       String?
+  config        String               @default("{}")
+  memberCount   Int                  @default(0)
+  itemCount     Int                  @default(0)
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+  favorites     Favorite[]
+  iterations    Iteration[]
+  notifications Notification[]
+  allocations   ResourceAllocation[]
+  members       SpaceMember[]
+  workItems     WorkItem[]
+  dependencies  ExternalDependency[]
+}
+
+model SpaceMember {
+  id       String   @id @default(cuid())
+  spaceId  String
+  userId   String
+  userName String
+  role     String   @default("member")
+  joinedAt DateTime @default(now())
+  space    Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+
+  @@unique([spaceId, userId])
+  @@index([userId])
+}
+
+model Tenant {
+  id          String       @id @default(cuid())
+  code        String       @unique
+  name        String
+  shortName   String       @default("")
+  logo        String       @default("")
+  industry    String       @default("")
+  scale       String       @default("")
+  contact     String       @default("")
+  phone       String       @default("")
+  status      String       @default("active")
+  expireAt    DateTime?
+  maxUsers    Int          @default(100)
+  plan        String       @default("standard")
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  ssoLogs     SSOLog[]
+  ssoSettings SSOSetting[]
+  users       User[]
+}
+
+model SSOSetting {
+  id          String   @id @default(cuid())
+  tenantId    String
+  provider    String
+  enabled     Boolean  @default(false)
+  appId       String   @default("")
+  appSecret   String   @default("")
+  redirectUri String   @default("")
+  corpId      String   @default("")
+  agentId     String   @default("")
+  config      String   @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, provider])
+}
+
+model SSOLog {
+  id        String   @id @default(cuid())
+  tenantId  String
+  provider  String
+  userKey   String
+  userName  String   @default("")
+  action    String
+  ip        String   @default("")
+  userAgent String   @default("")
+  success   Boolean  @default(true)
+  errorMsg  String   @default("")
+  createdAt DateTime @default(now())
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+}
+
+// ========== V1.6 LLM 大模型设置 ==========
+// 支持 OpenAI 兼容 + Anthropic + 国产大模型 + Ollama + 自定义
+model LLMSettings {
+  id        String   @id @default(cuid())
+  // 提供方 key：openai | anthropic | deepseek | qwen | glm | moonshot | doubao | ollama | custom
+  provider  String   @unique
+  // 显示名称
+  name      String
+  // API Base URL（OpenAI 兼容 / Anthropic 兼容）
+  baseUrl   String   @default("")
+  // API Key（生产应加密存）
+  apiKey    String   @default("")
+  // 默认模型
+  model     String   @default("")
+  // 温度 0-1
+  temperature Float  @default(0.3)
+  // 最大 token
+  maxTokens Int      @default(2048)
+  // 是否启用（多 provider 可同时启用，但只有主 provider 生效）
+  enabled   Boolean  @default(true)
+  // 是否主 provider（true 的话路由 AI 调用走这个）
+  isPrimary Boolean  @default(false)
+  // 备注
+  note      String   @default("")
+  // 额外配置 JSON（代理、超时等）
+  extra     String   @default("{}")
+  // 用户自定义模型名列表（JSON 数组），追加在预置模型后
+  customModels String @default("[]")
+  // 用户当前选中的模型（运行时切换；为空走 defaultModel）
+  currentModel String   @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Notification {
+  id           String    @id @default(cuid())
+  spaceId      String?
+  recipientId  String
+  actorId      String?
+  type         String
+  level        String    @default("info")
+  title        String
+  content      String    @default("")
+  resourceType String?
+  resourceId   String?
+  link         String    @default("")
+  meta         String?   // V1.14 提及/上下文 JSON
+  read         Boolean   @default(false)
+  readAt       DateTime?
+  createdAt    DateTime  @default(now())
+  space        Space?    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+
+  @@index([recipientId, read])
+  @@index([recipientId, createdAt])
+  @@index([spaceId])
+  @@index([recipientId, type])
+}
+
+model Favorite {
+  id           String   @id @default(cuid())
+  spaceId      String?
+  userId       String
+  resourceType String
+  resourceId   String
+  title        String
+  subtitle     String   @default("")
+  icon         String   @default("star")
+  link         String   @default("")
+  folder       String   @default("默认")
+  position     Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  space        Space?   @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, resourceType, resourceId])
+  @@index([userId])
+  @@index([spaceId])
+}
+
+model ResourceAllocation {
+  id             String   @id @default(cuid())
+  spaceId        String?
+  userId         String
+  userName       String
+  workItemId     String
+  workItemKey    String
+  workItemTitle  String
+  startDate      DateTime
+  endDate        DateTime
+  allocatedHours Float
+  type           String   @default("develop")
+  status         String   @default("planned")
+  note           String   @default("")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  space          Space?   @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+
+  @@index([userId, startDate, endDate])
+  @@index([workItemId])
+  @@index([spaceId])
+}
+
+model WorkbenchConfig {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  defaultSpaceId String?
+  layout         String   @default("[]")
+  readNotifIds   String   @default("[]")
+  preferences    String   @default("{}")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model FormulaField {
+  id           String   @id @default(cuid())
+  spaceId      String?
+  workType     String
+  name         String
+  fieldKey     String
+  formula      String   @default("")
+  outputType   String   @default("number")
+  format       String   @default("")
+  description  String   @default("")
+  enabled      Boolean  @default(true)
+  createdBy    String?
+  cachedValues String   @default("{}")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([spaceId, workType, fieldKey])
+  @@index([spaceId, workType])
+}
+
+model RollupField {
+  id           String   @id @default(cuid())
+  spaceId      String?
+  workType     String
+  name         String
+  fieldKey     String
+  childType    String   @default("task")
+  sourceField  String
+  aggregation  String   @default("sum")
+  outputType   String   @default("number")
+  format       String   @default("")
+  description  String   @default("")
+  enabled      Boolean  @default(true)
+  cachedValues String   @default("{}")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([spaceId, workType, fieldKey])
+  @@index([spaceId, workType])
+}
+
+model WorkItemTemplate {
+  id            String   @id @default(cuid())
+  spaceId       String?
+  name          String
+  workType      String
+  description   String   @default("")
+  defaultFields String   @default("{}")
+  childItems    String   @default("[]")
+  useCount      Int      @default(0)
+  tags          String   @default("")
+  category      String   @default("通用")
+  createdBy     String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([spaceId, workType])
+  @@index([category])
+}
+
+model AutomationRule {
+  id            String    @id @default(cuid())
+  spaceId       String?
+  name          String
+  description   String    @default("")
+  enabled       Boolean   @default(true)
+  trigger       String
+  conditions    String    @default("[]")
+  actions       String
+  runCount      Int       @default(0)
+  lastRunAt     DateTime?
+  lastRunResult String    @default("")
+  createdBy     String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([spaceId, enabled])
+}
+
+model AutomationLog {
+  id               String   @id @default(cuid())
+  ruleId           String
+  ruleName         String
+  triggerContext   String   @default("{}")
+  conditionsResult String   @default("false")
+  actionsExecuted  String   @default("[]")
+  status           String   @default("success")
+  error            String   @default("")
+  createdAt        DateTime @default(now())
+
+  @@index([ruleId, createdAt])
+}
+
+model WebhookConfig {
+  id             String    @id @default(cuid())
+  spaceId        String?
+  name           String
+  url            String
+  events         String    @default("")
+  headers        String    @default("{}")
+  secret         String    @default("")
+  enabled        Boolean   @default(true)
+  retryCount     Int       @default(3)
+  totalCalls     Int       @default(0)
+  successCalls   Int       @default(0)
+  failedCalls    Int       @default(0)
+  lastCallAt     DateTime?
+  lastCallStatus String    @default("")
+  createdBy      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([spaceId, enabled])
+}
+
+model WebhookLog {
+  id         String   @id @default(cuid())
+  configId   String
+  event      String
+  payload    String   @default("{}")
+  response   String   @default("")
+  status     String   @default("success")
+  statusCode Int      @default(200)
+  duration   Int      @default(0)
+  error      String   @default("")
+  createdAt  DateTime @default(now())
+
+  @@index([configId, createdAt])
+}
+
+model ImportJob {
+  id         String    @id @default(cuid())
+  spaceId    String?
+  name       String
+  resource   String
+  fileName   String
+  mapping    String    @default("[]")
+  defaults   String    @default("{}")
+  status     String    @default("pending")
+  total      Int       @default(0)
+  processed  Int       @default(0)
+  succeeded  Int       @default(0)
+  failed     Int       @default(0)
+  errors     String    @default("[]")
+  createdBy  String?
+  createdAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  @@index([spaceId, status])
+}
+
+model WorkHandover {
+  id           String   @id @default(cuid())
+  spaceId      String?
+  fromUserId   String
+  fromUserName String
+  toUserId     String
+  toUserName   String
+  workItemIds  String
+  reason       String   @default("")
+  status       String   @default("done")
+  createdAt    DateTime @default(now())
+
+  @@index([spaceId, fromUserId])
+  @@index([spaceId, toUserId])
+}
+
+model Baseline {
+  id            String   @id @default(cuid())
+  spaceId       String?
+  iterationId   String?
+  iterationName String?
+  name          String
+  description   String   @default("")
+  snapshot      String   @default("[]")
+  itemCount     Int      @default(0)
+  totalEstimate Float    @default(0)
+  baselineType  String   @default("iteration")
+  createdBy     String?
+  createdAt     DateTime @default(now())
+
+  @@index([spaceId, iterationId])
+  @@index([baselineType])
+}
+
+model ResourceAnalysis {
+  id          String   @id @default(cuid())
+  spaceId     String?
+  startDate   DateTime
+  endDate     DateTime
+  result      String   @default("{}")
+  riskCount   Int      @default(0)
+  healthScore Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  @@index([spaceId, createdAt])
+}
+
+model TestCase {
+  id             String         @id @default(cuid())
+  spaceId        String?
+  code           String         @unique
+  title          String
+  description    String         @default("")
+  caseType       String         @default("functional")
+  priority       String         @default("P1")
+  module         String         @default("")
+  tags           String         @default("")
+  preconditions  String         @default("")
+  steps          String         @default("[]")
+  expectedResult String         @default("")
+  workItemId     String?
+  workItemKey    String?
+  automated      Boolean        @default(false)
+  status         String         @default("active")
+  createdBy      String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  bugs           TestCaseBug[]
+  planCases      TestPlanCase[]
+
+  @@index([spaceId, module])
+  @@index([workItemId])
+  @@index([caseType])
+  @@index([priority])
+}
+
+model TestPlan {
+  id            String         @id @default(cuid())
+  spaceId       String?
+  name          String
+  description   String         @default("")
+  iterationId   String?
+  iterationName String?
+  workItemIds   String         @default("[]")
+  startDate     DateTime
+  endDate       DateTime
+  status        String         @default("draft")
+  ownerId       String?
+  ownerName     String?
+  participants  String         @default("[]")
+  totalCases    Int            @default(0)
+  passedCases   Int            @default(0)
+  failedCases   Int            @default(0)
+  blockedCases  Int            @default(0)
+  skippedCases  Int            @default(0)
+  createdBy     String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  planCases     TestPlanCase[]
+  runs          TestRun[]
+
+  @@index([spaceId, status])
+  @@index([iterationId])
+}
+
+model TestPlanCase {
+  id           String    @id @default(cuid())
+  planId       String
+  caseId       String
+  orderNum     Int       @default(0)
+  assignee     String?
+  assigneeName String?
+  status       String    @default("pending")
+  actualResult String    @default("")
+  notes        String    @default("")
+  executedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  case         TestCase  @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  plan         TestPlan  @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@unique([planId, caseId])
+  @@index([planId, status])
+  @@index([assignee, status])
+}
+
+model TestRun {
+  id         String    @id @default(cuid())
+  planId     String
+  planName   String
+  runnerId   String
+  runnerName String
+  caseIds    String    @default("[]")
+  passed     Int       @default(0)
+  failed     Int       @default(0)
+  blocked    Int       @default(0)
+  skipped    Int       @default(0)
+  status     String    @default("running")
+  notes      String    @default("")
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  plan       TestPlan  @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@index([planId, status])
+  @@index([runnerId])
+}
+
+model TestCaseBug {
+  id           String   @id @default(cuid())
+  caseId       String
+  bugId        String
+  bugKey       String
+  bugTitle     String
+  relationType String   @default("found_by")
+  notes        String   @default("")
+  createdBy    String?
+  createdAt    DateTime @default(now())
+  case         TestCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@unique([caseId, bugId])
+  @@index([bugId])
+}
+
+// ========== V1.7 客户/车型/项目 关系 ==========
+// AVM 集成项目管理的核心业务对象
+// 客户 = 吉利内部各车型项目组（内部录入，不开外部门户）
+// 车型 = 吉利各车型（银河L7 / 极氪001 / 领克09 等）
+// 联系人 = 项目组中的 UPL/PPM/测试/开发/AVM 接口人
+// 项目 = 一个 AVM 集成项目（绑定 1 个客户 + 1 个车型）
+model Customer {
+  id          String    @id @default(cuid())
+  code        String    @unique
+  name        String
+  shortName   String    @default("")
+  type        String    @default("internal")
+  industry    String    @default("汽车主机厂")
+  contact     String    @default("")
+  phone       String    @default("")
+  email       String    @default("")
+  address     String    @default("")
+  description String    @default("")
+  status      String    @default("active")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  contacts    Contact[]
+  projects    Project[]
+  workItems   WorkItem[]
+
+  @@index([status])
+}
+
+model CarModel {
+  id          String    @id @default(cuid())
+  code        String    @unique
+  name        String
+  brand       String
+  series      String    @default("")
+  launchYear  Int?
+  segment     String    @default("")
+  platform    String    @default("")
+  description String    @default("")
+  status      String    @default("active")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  projects    Project[]
+  workItems   WorkItem[]
+
+  @@index([brand])
+  @@index([status])
+}
+
+model Contact {
+  id          String   @id @default(cuid())
+  customerId  String
+  name        String
+  role        String
+  department  String   @default("")
+  phone       String   @default("")
+  email       String   @default("")
+  feishuId    String   @default("")
+  note        String   @default("")
+  primary     Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@index([role])
+}
+
+model Project {
+  id             String     @id @default(cuid())
+  code           String     @unique
+  name           String
+  description    String     @default("")
+  customerId     String
+  carModelId     String
+  pmUserId       String?
+  pmUserName     String?
+  startDate      DateTime
+  endDate        DateTime
+  status         String     @default("planning")
+  billingType    String     @default("ODC")
+  contractAmount Float      @default(0)
+  budgetHours    Float      @default(0)
+  consumedHours  Float      @default(0)
+  risk           String     @default("low")
+  progress       Int        @default(0)
+  tags           String     @default("")
+  createdBy      String?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  customer       Customer   @relation(fields: [customerId], references: [id])
+  carModel       CarModel   @relation(fields: [carModelId], references: [id])
+  workItems      WorkItem[]
+  dependencies   ExternalDependency[]
+
+  @@index([customerId])
+  @@index([carModelId])
+  @@index([status])
+  @@index([pmUserId])
+}
+
+// ========== V1.7.1 外部依赖管理 ==========
+// AVM 集成的关键外部依赖：台架 / 实车 / 车模 / SDB / UE / UI / 标定
+// 状态: pending(待准备) | preparing(准备中) | ready(已就绪) | blocked(卡点) | cancelled(取消)
+model ExternalDependency {
+  id           String   @id @default(cuid())
+  type         String   // 台架 / 实车 / 车模 / SDB / UE / UI / 标定
+  name         String   // 依赖名称（如"吉利研究院 4 号台架"）
+  description  String   @default("")
+  status       String   @default("pending")
+  owner        String   @default("")  // 负责人
+  expectedDate DateTime?              // 预计就绪时间
+  actualDate   DateTime?              // 实际就绪时间
+  blocker      String   @default("")  // 卡点说明（status=blocked 时必填）
+  workItemId   String?               // 关联工作项（可空，全局依赖）
+  projectId    String?               // 关联项目（可空）
+  spaceId      String?
+  createdBy    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  workItem     WorkItem?  @relation(fields: [workItemId], references: [id], onDelete: SetNull)
+  project      Project?   @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  space        Space?     @relation(fields: [spaceId], references: [id])
+
+  @@index([type])
+  @@index([status])
+  @@index([expectedDate])
+  @@index([projectId])
+  @@index([workItemId])
+  @@index([spaceId])
+  // V1.10 组合索引 (列表 type+status 过滤)
+  @@index([type, status])
+  @@index([status, expectedDate])
+}
+
+// V1.26 AI 周报/月报历史记录
+model AIReport {
+  id          String   @id @default(cuid())
+  type        String   // 'week' | 'month' | 'quarter' | 'custom'
+  periodLabel String   // "过去 7 天" / "过去 30 天" / "2026-07-01 ~ 2026-07-22" 等
+  startDate   DateTime
+  endDate     DateTime
+  content     String   // Markdown 报告全文
+  summary     String   @default("") // JSON 字符串: { projectCount, highRiskCount, newItemCount, completedItemCount, criticalItemCount, activityCount }
+  llmModel    String?  // null = 模板生成
+  userFilter  String?  // 按人过滤
+  projectCode String?  // 按项目过滤
+  createdBy   String   @default("") // 创建人 username
+  createdAt   DateTime @default(now())
+
+  @@index([type])
+  @@index([type, createdAt])
+  @@index([createdAt])
+}

@@ -1,0 +1,60 @@
+# 排除不需要打进 image 的文件
+node_modules
+dist
+.vite
+.git
+.github
+.vscode
+.idea
+*.log
+*.md
+.DS_Store
+
+# 后端
+backend/data.db
+backend/data.db-journal
+backend/node_modules
+backend/dist
+backend/prisma/data.db
+backend/prisma/data.db-journal
+backend/.env
+
+# 前端
+frontend/node_modules
+frontend/dist
+frontend/.vite
+
+# E2E 脚本
+_*.py
+_t*.py
+_*.ts
+_*_check.py
+_*_test.py
+_*_dbg*.py
+_*_verify.py
+_*_state.py
+_*_idx*.py
+_*_v*.py
+_*_mcp_*.py
+_*_sse_*.py
+_*_gantt_*.py
+_*_users.py
+_*_perf.py
+_*_list_*.py
+_*_start_*.py
+_*_clean.py
+out-*
+out.*
+out2.*
+tmp.*
+test_ai.py
+fix_llm_*
+test_switch_*
+
+# 调试
+*.pyc
+__pycache__
+.cache
+
+# Edge profile (dev 临时)
+.edge-profile

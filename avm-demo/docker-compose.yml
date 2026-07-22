@@ -1,0 +1,72 @@
+# AVM Demo - Docker Compose (PostgreSQL 生产模式)
+# 启动: docker compose up -d --build
+# 初始化: docker compose exec backend npx prisma migrate deploy
+# 访问: http://localhost:8080
+#  - 8080 → 前端 (nginx:80)
+#  - 4000 → 后端 API (可选, 一般通过前端反代访问)
+
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: avm-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: avm
+      POSTGRES_DB: avm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-avm_secure_pwd_change_me}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U avm"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  backend:
+    build: ./backend
+    container_name: avm-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: "postgresql://avm:${POSTGRES_PASSWORD:-avm_secure_pwd_change_me}@postgres:5432/avm?schema=public"
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-avm_secure_pwd_change_me}
+    expose:
+      - "4000"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:4000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE: /api
+    container_name: avm-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "8080:80"   # 浏览器访问
+      - "4000:4000" # 可选: 直接访问 backend (调试用)
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost/"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  postgres-data:
+    driver: local
