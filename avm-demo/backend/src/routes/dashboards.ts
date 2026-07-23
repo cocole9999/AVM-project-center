@@ -1,9 +1,10 @@
 import { Router } from 'express';
 import { prisma } from '../db';
+import { asyncHandler } from '../middleware/validate';
 
 export const dashboardRouter = Router();
 
-dashboardRouter.get('/', async (_req, res) => {
+dashboardRouter.get('/', asyncHandler(async (_req, res) => {
   const list = await prisma.dashboard.findMany({
     orderBy: { updatedAt: 'desc' },
     include: { _count: { select: { charts: true } } },
@@ -11,7 +12,7 @@ dashboardRouter.get('/', async (_req, res) => {
   res.json(list);
 });
 
-dashboardRouter.get('/:id', async (req, res) => {
+dashboardRouter.get('/:id', asyncHandler(async (req, res) => {
   const d = await prisma.dashboard.findUnique({
     where: { id: req.params.id },
     include: { charts: { orderBy: { position: 'asc' } } },

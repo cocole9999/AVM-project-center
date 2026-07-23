@@ -7,6 +7,7 @@ import { Router } from 'express';
 import { prisma } from '../db';
 import { caches } from '../cache';
 import { requireAuth, autoRole } from '../middleware/auth';
+import { withTenant } from '../middleware/tenant';
 import { recordAudit, actorFromReq, diffFields } from '../utils/audit';
 
 export const carModelRouter = Router();

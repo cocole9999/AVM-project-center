@@ -47,17 +47,33 @@ treeRouter.get('/stats', async (req, res) => {
     const where: any = {};
     if (type) where.type = type;
     if (spaceId) where.spaceId = spaceId;
-    const items = await prisma.workItem.findMany({ where });
+    const items = await prisma.workItem.findMany({ where, select: { id: true, parentId: true, type: true, estimate: true, actualHours: true } });
+
+    // 批量计算深度（避免 N+1 逐条查父级）
+    const parentIds = items.map(i => i.parentId).filter(Boolean) as string[];
+    const allItems = new Map<string, any>();
+    for (const i of items) allItems.set(i.id, i);
+    // 缓存已查询的父级
+    const parentCache = new Map<string, { id: string; parentId: string | null }>();
+    for (const pid of parentIds) {
+      if (!allItems.has(pid)) {
+        const p = await prisma.workItem.findUnique({ where: { id: pid }, select: { id: true, parentId: true } });
+        if (p) parentCache.set(p.id, p);
+      }
+    }
 
     const stats: any = { total: items.length, byDepth: {}, totalEstimate: 0, totalActual: 0, byType: {} };
     for (const i of items) {
       // 深度
       let depth = 0;
-      let cur = i;
-      while (cur.parentId) {
+      let curPid = i.parentId;
+      const visited = new Set<string>();
+      while (curPid && !visited.has(curPid)) {
+        visited.add(curPid);
         depth++;
-        cur = await prisma.workItem.findUnique({ where: { id: cur.parentId } }) as any;
-        if (!cur || depth > 10) break;
+        const parent = allItems.get(curPid) || parentCache.get(curPid);
+        curPid = parent?.parentId || null;
+        if (depth > 10) break;
       }
       stats.byDepth[depth] = (stats.byDepth[depth] || 0) + 1;
       stats.totalEstimate += i.estimate || 0;

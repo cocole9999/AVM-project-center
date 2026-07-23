@@ -11,11 +11,13 @@ import { recordAudit, actorFromReq, diffFields } from '../utils/audit';
 import { validate } from '../middleware/validate';
 import { createProjectSchema, updateProjectSchema } from '../schemas/project';
 import { withTenant } from '../middleware/tenant';
+import { asyncHandler } from '../middleware/validate';
 
 export const projectRouter = Router();
 
 // V1.11: 所有路由都要鉴权 (开发模式默认放行, 生产模式严格)
 projectRouter.use(requireAuth);
+projectRouter.use(withTenant);
 
 // 列表 + 过滤（V1.10 加 LRU 缓存，5min TTL，无过滤时命中）
 projectRouter.get('/', async (req, res) => {

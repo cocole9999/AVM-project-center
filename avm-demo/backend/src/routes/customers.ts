@@ -8,12 +8,14 @@ import { Router } from 'express';
 import { prisma } from '../db';
 import { caches } from '../cache';
 import { requireAuth, autoRole } from '../middleware/auth';
+import { withTenant } from '../middleware/tenant';
 import { recordAudit, actorFromReq, diffFields } from '../utils/audit';
 
 export const customerRouter = Router();
 
-// V1.11: 鉴权 + 写保护
+// V1.11: 鉴权 + 写保护 + 多租户
 customerRouter.use(requireAuth);
+customerRouter.use(withTenant);
 customerRouter.use(autoRole());
 
 // 列表 + 过滤（V1.10 无过滤时命中 LRU 缓存）
@@ -25,6 +27,7 @@ customerRouter.get('/', async (req, res) => {
     if (cached) return res.json(cached);
   }
   const where: any = {};
+  if (req.tenantId) where.tenantId = req.tenantId;
   if (status) where.status = status;
   if (type) where.type = type;
   if (q) {

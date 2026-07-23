@@ -1,20 +1,21 @@
 import { Router } from 'express';
+import { asyncHandler } from '../middleware/validate';
 import * as review from '../services/reviewEngine';
 
 export const reviewRouter = Router();
 
 // 列出评审
-reviewRouter.get('/', async (req, res) => {
+reviewRouter.get('/', asyncHandler(async (req, res) => {
   const list = await review.listReviews(req.query.workItemId as string);
   res.json(list);
-});
+}));
 
 // 获取评审详情
-reviewRouter.get('/:id', async (req, res) => {
+reviewRouter.get('/:id', asyncHandler(async (req, res) => {
   const r = await review.getReview(req.params.id);
   if (!r) return res.status(404).json({ error: 'Review not found' });
   res.json(r);
-});
+}));
 
 // 发起评审
 reviewRouter.post('/', async (req, res) => {
@@ -48,10 +49,10 @@ reviewRouter.post('/:id/finalize', async (req, res) => {
 });
 
 // 评审模板
-reviewRouter.get('/templates/all', async (_req, res) => {
+reviewRouter.get('/templates/all', asyncHandler(async (_req, res) => {
   const list = await review.listReviewTemplates();
   res.json(list);
-});
+}));
 
 reviewRouter.post('/templates', async (req, res) => {
   try {

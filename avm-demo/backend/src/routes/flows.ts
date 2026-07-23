@@ -1,30 +1,31 @@
 import { Router } from 'express';
+import { asyncHandler } from '../middleware/validate';
 import * as flowEngine from '../services/flowEngine';
 import { prisma } from '../db';
 
 export const flowRouter = Router();
 
 // 列出所有节点流
-flowRouter.get('/', async (_req, res) => {
+flowRouter.get('/', asyncHandler(async (_req, res) => {
   const flows = await flowEngine.listFlows();
   res.json(flows);
-});
+}));
 
 // 获取某个工作项类型的活跃节点流
-flowRouter.get('/active/:workType', async (req, res) => {
+flowRouter.get('/active/:workType', asyncHandler(async (req, res) => {
   const flow = await flowEngine.getActiveFlow(req.params.workType);
   res.json(flow);
-});
+}));
 
 // 获取单个节点流详情（含 nodes + transitions）
-flowRouter.get('/:id', async (req, res) => {
+flowRouter.get('/:id', asyncHandler(async (req, res) => {
   const flow = await prisma.nodeFlow.findUnique({
     where: { id: req.params.id },
     include: { nodes: true, transitions: true },
   });
   if (!flow) return res.status(404).json({ error: 'Flow not found' });
   res.json(flow);
-});
+}));
 
 // 保存节点流
 flowRouter.post('/', async (req, res) => {
@@ -66,7 +67,7 @@ flowRouter.post('/transition/:workItemId', async (req, res) => {
 });
 
 // 获取工作项可用的流转
-flowRouter.get('/transitions/:workItemId', async (req, res) => {
+flowRouter.get('/transitions/:workItemId', asyncHandler(async (req, res) => {
   const list = await flowEngine.getAvailableTransitions(req.params.workItemId);
   res.json(list);
-});
+}));

@@ -4,7 +4,7 @@ import { asyncHandler } from '../middleware/validate';
 
 export const iterationRouter = Router();
 
-iterationRouter.get('/', asyncHandler(async (_req, res) => {
+iterationRouter.get('/', withTenant, asyncHandler(async (_req, res) => {
   const items = await prisma.iteration.findMany({
     orderBy: { startDate: 'desc' },
     include: { _count: { select: { workItems: true } } },

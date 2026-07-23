@@ -1,10 +1,11 @@
 import { Router } from 'express';
 import { prisma } from '../db';
+import { asyncHandler } from '../middleware/validate';
 
 export const chartRouter = Router();
 
 // 列出图表
-chartRouter.get('/', async (req, res) => {
+chartRouter.get('/', asyncHandler(async (req, res) => {
   const { dashboardId } = req.query;
   const where: any = {};
   if (dashboardId) where.dashboardId = String(dashboardId);
@@ -16,7 +17,7 @@ chartRouter.get('/', async (req, res) => {
 });
 
 // 获取图表
-chartRouter.get('/:id', async (req, res) => {
+chartRouter.get('/:id', asyncHandler(async (req, res) => {
   const c = await prisma.chartConfig.findUnique({ where: { id: req.params.id } });
   if (!c) return res.status(404).json({ error: 'Chart not found' });
   res.json(c);
@@ -41,7 +42,7 @@ chartRouter.patch('/:id', async (req, res) => {
   }
 });
 
-chartRouter.delete('/:id', async (req, res) => {
+chartRouter.delete('/:id', asyncHandler(async (req, res) => {
   await prisma.chartConfig.delete({ where: { id: req.params.id } });
   res.status(204).end();
 });
@@ -86,11 +87,11 @@ async function computeChartData(chart: any, extraFilters: any[] = []) {
 
   let records: any[] = [];
   if (source === 'work_items') {
-    records = await prisma.workItem.findMany();
+    records = await prisma.workItem.findMany({ take: 2000 });
   } else if (source === 'activities') {
-    records = await prisma.activity.findMany();
+    records = await prisma.activity.findMany({ take: 2000 });
   } else if (source === 'comments') {
-    records = await prisma.comment.findMany();
+    records = await prisma.comment.findMany({ take: 2000 });
   }
 
   // 应用筛选

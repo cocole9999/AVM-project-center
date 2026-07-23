@@ -583,15 +583,16 @@ workItemRouter.post('/bulk-status', async (req, res) => {
       })
     )
   );
-  for (const id of ids) {
-    await prisma.activity.create({
-      data: {
-        workItemId: id, actor: actor || '系统',
-        action: 'status_changed',
-        field: 'status', newValue: status,
-      },
-    });
-  }
+  // 批量写入 activity（替代 N+1 循环写入）
+  await prisma.activity.createMany({
+    data: ids.map((id: string) => ({
+      workItemId: id,
+      actor: actor || '系统',
+      action: 'status_changed',
+      field: 'status',
+      newValue: status,
+    })),
+  });
   res.json({ updated: ids.length });
 });
 
