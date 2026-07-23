@@ -50,18 +50,53 @@ aiCommandRouter.post('/command', async (req, res) => {
 
     // ===== 智能直答：常见查询模式直接处理，不经过 LLM =====
     // 某些模型（如 DeepSeek V4 Flash）的 function calling 不稳定，
-    // 常见查询直接查库并格式化返回，更可靠更快速。
-    const directAnswer = await tryDirectAnswer(command);
-    if (directAnswer) {
-      return res.json({
-        ok: true,
-        command,
-        reply: directAnswer,
-        toolCalls: [],
-        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
-        llmModel: 'rule-engine',
-        provider: 'rule-engine',
+    // 查询工作项直接查库并格式化返回，更可靠更快速。
+    const cmdTrimmed = command.trim();
+    console.warn('[AI-DEBUG] command=', JSON.stringify(command), 'has工作=', cmdTrimmed.includes('工作'));
+    const hasAssigneeQ = cmdTrimmed.includes('负责') || cmdTrimmed.includes('工作') || 
+      cmdTrimmed.includes('任务') || cmdTrimmed.includes('缺陷') || cmdTrimmed.includes('需求');
+    if (hasAssigneeQ) {
+      const aiDbNames = await prisma.workItem.findMany({
+        where: { assignee: { not: null } },
+        distinct: ['assignee'],
+        select: { assignee: true },
       });
+      const aiNameList = aiDbNames.map(r => r.assignee).filter((n): n is string => !!n);
+      const aiMatched = aiNameList.filter(n => {
+        const s = n.slice(0, 2);
+        return s.length >= 2 && cmdTrimmed.includes(s);
+      });
+      if (aiMatched.length > 0) {
+        const aiAllItems = await prisma.workItem.findMany({
+          where: { assignee: { not: null } },
+          select: { key: true, type: true, title: true, status: true, priority: true, assignee: true, planEnd: true },
+          orderBy: [{ assignee: 'asc' }, { priority: 'asc' }],
+        });
+        const aiByPerson: Record<string, any[]> = {};
+        for (const it of aiAllItems) {
+          const n = it.assignee || '未指派';
+          if (!aiByPerson[n]) aiByPerson[n] = [];
+          aiByPerson[n].push(it);
+        }
+        const aiLines: string[] = [];
+        aiLines.push(`## 工作项 — 按负责人列出\n`);
+        for (const name of aiMatched) {
+          const items = aiByPerson[name] || [];
+          aiLines.push(`### ${name}（${items.length} 项）`);
+          for (const it of items) {
+            const t = { requirement: '需求', task: '任务', bug: '缺陷', release: '发布' }[it.type as string] || it.type;
+            aiLines.push(`- **${it.key}** ${it.title} | ${t} | ${it.status} | ${it.priority}${it.planEnd ? ' | 截止: ' + (it.planEnd as string).slice(0,10) : ''}`);
+          }
+          aiLines.push('');
+        }
+        aiLines.push(`---\n📊 共列出 ${aiMatched.reduce((s, n) => s + (aiByPerson[n] || []).length, 0)} 项工作项。`);
+        return res.json({
+          ok: true, command,
+          reply: aiLines.join('\n'), toolCalls: [],
+          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+          llmModel: 'rule-engine', provider: 'rule-engine',
+        });
+      }
     }
 
     // 拉项目快照（5 分钟缓存）让 LLM 知道有哪些项目/客户
@@ -1327,6 +1362,22 @@ async function tryDirectAnswer(command: string): Promise<string | null> {
     cmd.includes('缺陷') || cmd.includes('需求') || cmd.includes('谁');
 
   if (hasAssigneeQuery) {
+    // 快速检查：DB 中有没有人名出现在用户输入中
+    const dbNamesRaw = await prisma.workItem.findMany({
+      where: { assignee: { not: null } },
+      distinct: ['assignee'],
+      select: { assignee: true },
+    });
+    const dbNames = dbNamesRaw.map(r => r.assignee).filter((n): n is string => !!n);
+    // 用前两字匹配姓名（张三 → 匹配 张三（研发一组））
+    const matchedDbNames = dbNames.filter(n => {
+      const short = n.slice(0, 2);
+      return short.length >= 2 && cmd.includes(short);
+    });
+
+    if (matchedDbNames.length === 0) return null; // 用户没问具体负责人
+
+    // 查所有工作项并按负责人分组
     const allItems = await prisma.workItem.findMany({
       where: { assignee: { not: null } },
       select: { key: true, type: true, title: true, status: true, priority: true, assignee: true, planEnd: true },
@@ -1338,45 +1389,22 @@ async function tryDirectAnswer(command: string): Promise<string | null> {
       if (!byAssignee[name]) byAssignee[name] = [];
       byAssignee[name].push(i);
     }
-    // 提取用户提到的姓名：直接用 DB 中的 assignee 名单模糊匹配用户输入
-    const allAssigneeNames = await prisma.workItem.findMany({
-      where: { assignee: { not: null } },
-      distinct: ['assignee'],
-      select: { assignee: true },
-    });
-    const dbNames = allAssigneeNames.map(r => r.assignee).filter((n): n is string => !!n);
-    
-    // 看用户提问中包含哪些 DB 中的负责人名字（直接检查 DB 中的名字是否出现在用户提问中）
-    // 中文无空格分词困难，所以直接用 DB 姓名列表逐一检查
-    const matched: string[] = dbNames.filter(name => cmd.includes(name) || cmd.includes(name.slice(0, 2)));
-    // 如果没匹配到全名，再尝试用姓名的前 2 个字匹配
-    if (matched.length === 0) {
-      // DB 中姓名格式通常是"张三（研发一组）"，取前 2 字匹配用户输入
-      for (const name of dbNames) {
-        const shortName = name.slice(0, 2);
-        if (cmd.includes(shortName) && !matched.some(m => m.includes(shortName))) {
-          matched.push(name);
-        }
-      }
-    }
 
-    if (matched.length > 0) {
-      const lines: string[] = [];
-      lines.push(`## 工作项 — 按负责人列出\n`);
-      for (const name of matched) {
-        const items = byAssignee[name];
-        lines.push(`### ${name}（${items.length} 项）`);
-        for (const i of items) {
-          const typeLabel = { requirement: '需求', task: '任务', bug: '缺陷', release: '发布' }[i.type as string] || i.type;
-          const dueInfo = i.planEnd ? ` | 截止: ${(i.planEnd as string).slice(0, 10)}` : '';
-          lines.push(`- **${i.key}** ${i.title} | ${typeLabel} | ${i.status} | ${i.priority}${dueInfo}`);
-        }
-        lines.push('');
+    const lines: string[] = [];
+    lines.push(`## 工作项 — 按负责人列出\n`);
+    for (const name of matchedDbNames) {
+      const items = byAssignee[name] || [];
+      lines.push(`### ${name}（${items.length} 项）`);
+      for (const i of items) {
+        const typeLabel = { requirement: '需求', task: '任务', bug: '缺陷', release: '发布' }[i.type as string] || i.type;
+        const dueInfo = i.planEnd ? ` | 截止: ${(i.planEnd as string).slice(0, 10)}` : '';
+        lines.push(`- **${i.key}** ${i.title} | ${typeLabel} | ${i.status} | ${i.priority}${dueInfo}`);
       }
-      lines.push(`---\n📊 共列出 ${matched.reduce((s, n) => s + byAssignee[n].length, 0)} 项工作项。`);
-      return lines.join('\n');
+      lines.push('');
     }
+    lines.push(`---\n📊 共列出 ${matchedDbNames.reduce((s, n) => s + ((byAssignee[n] || []).length), 0)} 项工作项。`);
+    return lines.join('\n');
   }
 
-  return null; // 未匹配直答规则，走 LLM
+  return null;
 }
