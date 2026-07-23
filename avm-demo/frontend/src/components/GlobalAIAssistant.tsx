@@ -173,7 +173,10 @@ export function GlobalAIAssistant() {
       setLlmStatus(s => ({ ...s!, provider }));
       antdMessage.success(`已切换到 ${provider}`);
     } catch (e: any) {
-      antdMessage.error('切换失败: ' + e.message);
+      const msg = e?.response?.data?.error || e.message;
+      antdMessage.error(`切换失败: ${msg}`);
+      // 重置下拉值到当前实际 provider
+      if (llmStatus) setLlmStatus(s => ({ ...s! }));
     }
   };
 
@@ -185,7 +188,8 @@ export function GlobalAIAssistant() {
       setLlmStatus(s => ({ ...s!, model }));
       antdMessage.success(`已切换到模型 ${model}`, 1);
     } catch (e: any) {
-      antdMessage.error('切换失败: ' + e.message);
+      const msg = e?.response?.data?.error || e.message;
+      antdMessage.error(`切换失败: ${msg}`);
     }
   };
 
@@ -274,7 +278,7 @@ export function GlobalAIAssistant() {
             <Space>
               <RobotOutlined style={{ color: '#1677ff' }} />
               <span>AI 助理</span>
-              {llmStatus && (
+              {llmStatus && llmStatus.provider !== 'mock' && (
                 <>
                   <Select
                     size="small"
@@ -283,17 +287,19 @@ export function GlobalAIAssistant() {
                     style={{ minWidth: 100 }}
                     options={llmProviderList.map(p => ({ value: p, label: p }))}
                   />
-                  <Select
-                    size="small"
-                    value={llmStatus.model}
-                    onChange={switchModel}
-                    style={{ minWidth: 130 }}
-                    options={llmModels.map(m => ({ value: m.id, label: m.id }))}
-                    showSearch
-                  />
+                  {llmModels.length > 0 && (
+                    <Select
+                      size="small"
+                      value={llmStatus.model}
+                      onChange={switchModel}
+                      style={{ minWidth: 130 }}
+                      options={llmModels.map(m => ({ value: m.id, label: m.id }))}
+                      showSearch
+                    />
+                  )}
                 </>
               )}
-              {!llmStatus && <Tag color="default">未配置</Tag>}
+              {(!llmStatus || llmStatus.provider === 'mock') && <Tag color="default">未配置 LLM</Tag>}
               {messageCount > 1 && (
                 <Tag color="cyan" icon={<HistoryOutlined />} style={{ marginLeft: 4 }}>
                   {messageCount} 轮
