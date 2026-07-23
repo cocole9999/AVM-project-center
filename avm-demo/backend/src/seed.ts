@@ -71,8 +71,8 @@ async function main() {
   await prisma.testRun.deleteMany();
   await prisma.testPlan.deleteMany();
   await prisma.testCase.deleteMany();
-  // V1.6 LLM 设置（避免影响 V1.6.8 E2E）
-  await prisma.LLMSettings.deleteMany();
+  // V1.6 LLM 设置（保留已有配置，仅清空测试数据）
+  // 注：跳过 deleteMany，让用户配置的 LLM 在多次 seed 间保持有效
   // V1.5
   await prisma.baseline.deleteMany();
   await prisma.resourceAnalysis.deleteMany();
