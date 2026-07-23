@@ -356,12 +356,193 @@ const listContacts: ToolDefinition = {
   },
 };
 
+// ========== 工具 9: 查询迭代/冲刺 ==========
+const listIterations: ToolDefinition = {
+  name: 'list_iterations',
+  description: '查询迭代/冲刺列表。可按状态过滤（active/planning/completed）。返回每个迭代的工作项数量、起止日期、进度。',
+  parameters: {
+    type: 'object',
+    properties: {
+      status: { type: 'string', description: '迭代状态：active / planning / completed（可选）' },
+      spaceId: { type: 'string', description: '所属空间 ID（可选）' },
+      limit: { type: 'number', description: '返回数量上限，默认 10' },
+    },
+  },
+  handler: async (args) => {
+    const where: any = {};
+    if (args.status) where.status = args.status;
+    if (args.spaceId) where.spaceId = args.spaceId;
+    const list = await prisma.iteration.findMany({
+      where,
+      include: {
+        _count: { select: { workItems: true } },
+        workItems: { select: { status: true } },
+      },
+      orderBy: { startDate: 'desc' },
+      take: Math.min(args.limit || 10, 30),
+    });
+    return list.map(i => {
+      const total = i.workItems.length;
+      const done = i.workItems.filter(w => ['已完成', '已关闭', '已验收', '已发布'].includes(w.status)).length;
+      return {
+        id: i.id, name: i.name, status: i.status,
+        startDate: i.startDate, endDate: i.endDate,
+        workItemCount: total,
+        completionRate: total > 0 ? Math.round(done / total * 100) + '%' : '0%',
+      };
+    });
+  },
+};
+
+// ========== 工具 10: 查询活动日志 ==========
+const queryActivities: ToolDefinition = {
+  name: 'query_activities',
+  description: '查询系统的最近活动/变更记录。适合回答"最近发生了什么""谁改了什么""张三最近做了什么"。可限定工作项、操作人、操作类型。',
+  parameters: {
+    type: 'object',
+    properties: {
+      workItemKey: { type: 'string', description: '按工作项编号过滤（如 REQ-1、TASK-2）' },
+      actor: { type: 'string', description: '按操作人过滤（用户名或显示名）' },
+      action: { type: 'string', description: '操作类型：created / status_changed / field_changed' },
+      days: { type: 'number', description: '最近 N 天的活动，默认 7 天' },
+      limit: { type: 'number', description: '返回数量上限，默认 20' },
+    },
+  },
+  handler: async (args) => {
+    const where: any = {};
+    if (args.workItemKey) {
+      const wi = await prisma.workItem.findUnique({ where: { key: args.workItemKey } });
+      if (wi) where.workItemId = wi.id;
+    }
+    if (args.actor) where.actor = { contains: args.actor };
+    if (args.action) where.action = args.action;
+    if (args.days) {
+      const since = new Date(Date.now() - args.days * 86400000);
+      where.createdAt = { gte: since };
+    }
+    const list = await prisma.activity.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: Math.min(args.limit || 20, 50),
+    });
+    return list.map(a => ({
+      actor: a.actor, action: a.action, field: a.field,
+      oldValue: a.oldValue, newValue: a.newValue,
+      time: a.createdAt,
+      workItemId: a.workItemId,
+    }));
+  },
+};
+
+// ========== 工具 11: 全局搜索 ==========
+const searchAll: ToolDefinition = {
+  name: 'search_all',
+  description: '全局搜索，跨工作项、项目、客户、车型、联系人搜索。适合回答"帮我找一下XX相关的所有信息"。',
+  parameters: {
+    type: 'object',
+    properties: {
+      keyword: { type: 'string', description: '搜索关键词' },
+      types: { type: 'string', description: '限定搜索范围，逗号分隔：work_items / projects / customers / car_models / contacts（默认全部）' },
+      limit: { type: 'number', description: '每类返回上限，默认 5' },
+    },
+  },
+  handler: async (args) => {
+    const q = args.keyword || '';
+    const types = (args.types || '').split(',').map((t: string) => t.trim()).filter(Boolean);
+    const limit = Math.min(args.limit || 5, 20);
+    const result: any = {};
+    if (types.length === 0 || types.includes('work_items')) {
+      const items = await prisma.workItem.findMany({
+        where: { OR: [{ title: { contains: q } }, { key: { contains: q } }, { description: { contains: q } }] },
+        take: limit, orderBy: { updatedAt: 'desc' },
+        select: { key: true, title: true, type: true, status: true, priority: true, assignee: true },
+      });
+      result.workItems = items;
+    }
+    if (types.length === 0 || types.includes('projects')) {
+      const projects = await prisma.project.findMany({
+        where: { OR: [{ name: { contains: q } }, { code: { contains: q } }] },
+        take: limit,
+        select: { code: true, name: true, status: true, risk: true, progress: true },
+      });
+      result.projects = projects;
+    }
+    if (types.length === 0 || types.includes('customers')) {
+      const customers = await prisma.customer.findMany({
+        where: { OR: [{ name: { contains: q } }, { code: { contains: q } }] },
+        take: limit,
+        select: { code: true, name: true, status: true, contact: true },
+      });
+      result.customers = customers;
+    }
+    if (types.length === 0 || types.includes('car_models')) {
+      const models = await prisma.carModel.findMany({
+        where: { OR: [{ name: { contains: q } }, { code: { contains: q } }, { brand: { contains: q } }] },
+        take: limit,
+        select: { code: true, name: true, brand: true, platform: true },
+      });
+      result.carModels = models;
+    }
+    if (types.length === 0 || types.includes('contacts')) {
+      const contacts = await prisma.contact.findMany({
+        where: { OR: [{ name: { contains: q } }, { department: { contains: q } }, { role: { contains: q } }] },
+        take: limit,
+        select: { name: true, role: true, phone: true, department: true, customer: { select: { name: true, code: true } } },
+      });
+      result.contacts = contacts;
+    }
+    return result;
+  },
+};
+
+// ========== 工具 12: 查询外部依赖 ==========
+const queryDependencies: ToolDefinition = {
+  name: 'query_dependencies',
+  description: '查询外部依赖（台架/实车/车模/SDB/UE/UI/标定等）。可按类型/状态/负责人/关联项目筛选。',
+  parameters: {
+    type: 'object',
+    properties: {
+      type: { type: 'string', description: '依赖类型：台架 / 实车 / 车模 / SDB / UE / UI / 标定 / 其他' },
+      status: { type: 'string', description: '状态：pending / preparing / ready / blocked / cancelled' },
+      owner: { type: 'string', description: '按负责人过滤' },
+      projectCode: { type: 'string', description: '按关联项目编码过滤' },
+      isOverdue: { type: 'boolean', description: 'true=只看超期的（expectedDate < today 且未 ready）' },
+      limit: { type: 'number', description: '返回数量上限，默认 20' },
+    },
+  },
+  handler: async (args) => {
+    const where: any = {};
+    if (args.type) where.type = args.type;
+    if (args.status) where.status = args.status;
+    if (args.owner) where.owner = { contains: args.owner };
+    if (args.projectCode) {
+      const p = await prisma.project.findUnique({ where: { code: args.projectCode } });
+      if (p) where.projectId = p.id;
+    }
+    if (args.isOverdue) {
+      where.expectedDate = { lt: new Date() };
+      where.status = { not: 'ready' };
+    }
+    const list = await prisma.externalDependency.findMany({
+      where, orderBy: [{ status: 'asc' }, { expectedDate: 'asc' }],
+      take: Math.min(args.limit || 20, 50),
+    });
+    return list.map(d => ({
+      type: d.type, name: d.name, status: d.status,
+      owner: d.owner, expectedDate: d.expectedDate,
+      actualDate: d.actualDate, blocker: d.blocker,
+    }));
+  },
+};
+
 // ========== 注册所有工具 ==========
 export const TOOLS: ToolDefinition[] = [
   // 8 个核心工具 (V1.8): 查询 + 工作项 CRUD
   listProjects, getProject, scanRisks,
   createWorkItem, updateWorkItem, listWorkItems,
   listCustomers, listContacts,
+  // 新增查询工具
+  listIterations, queryActivities, searchAll, queryDependencies,
   // 18 个扩展工具 (V1.8.1): 全量实体 CRUD
   createProject, updateProject, deleteProject,
   createCustomer, updateCustomer,
