@@ -48,15 +48,118 @@ aiCommandRouter.post('/command', async (req, res) => {
       return res.status(400).json({ error: 'LLM 未配置，请先在 LLM 设置里配置 API Key' });
     }
 
+    // ===== 智能直答：常见查询模式直接处理，不经过 LLM =====
+    // 某些模型（如 DeepSeek V4 Flash）的 function calling 不稳定，
+    // 常见查询直接查库并格式化返回，更可靠更快速。
+    const directAnswer = await tryDirectAnswer(command);
+    if (directAnswer) {
+      return res.json({
+        ok: true,
+        command,
+        reply: directAnswer,
+        toolCalls: [],
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        llmModel: 'rule-engine',
+        provider: 'rule-engine',
+      });
+    }
+
     // 拉项目快照（5 分钟缓存）让 LLM 知道有哪些项目/客户
     const snapshot = await buildProjectSnapshot();
+
+    // ===== 预查询：自动识别常见查询模式并预执行工具 =====
+    // 不依赖 LLM 的 function calling 能力（部分模型不支持或不可靠）
+    const preQueryResults: string[] = [];
+
+    // 通用模式: 按负责人查询工作项
+    // 匹配 "张三的工作项" "李四负责的任务" "列出张三和李四的工作项" 等
+    if (command.includes('负责') || command.includes('工作') || command.includes('任务') ||
+        command.includes('缺陷') || command.includes('需求') || command.includes('谁') ||
+        command.includes('张') || command.includes('李') || command.includes('王')) {
+      // 直接从数据库查出所有工作项，按负责人分组
+      try {
+        const { prisma } = await import('../db');
+        const allItems = await prisma.workItem.findMany({
+          where: { assignee: { not: null } },
+          select: { key: true, type: true, title: true, status: true, priority: true, assignee: true, planStart: true, planEnd: true, estimate: true },
+          orderBy: [{ assignee: 'asc' }, { priority: 'asc' }],
+        });
+        // 按负责人分组
+        const byAssignee: Record<string, any[]> = {};
+        for (const i of allItems) {
+          const name = i.assignee || '未指派';
+          if (!byAssignee[name]) byAssignee[name] = [];
+          byAssignee[name].push(i);
+        }
+        // 只取对当前查询有用的组（匹配用户提到的姓名）
+        const mentionNames = command.replace(/[，,、和与及]/g, '|').split('|')
+          .map(s => s.trim()).filter(s => s.length >= 2 && s.length <= 10 &&
+            !['分别', '列出', '查看', '查找', '工作项', '任务', '缺陷', '需求', '负责', '的', '谁'].includes(s));
+        
+        for (const [name, items] of Object.entries(byAssignee)) {
+          // 如果用户提到了某个名字，或者用户没指定名字就都列出
+          if (mentionNames.length === 0 || mentionNames.some(m => name.includes(m) || m.includes(name))) {
+            if (items.length > 0) {
+              preQueryResults.push(`## 负责人"${name}" 的工作项（共 ${items.length} 项）\n` +
+                items.map((i: any) =>
+                  `- ${i.key} (${i.type === 'requirement' ? '需求' : i.type === 'task' ? '任务' : i.type === 'bug' ? '缺陷' : '发布'}) ${i.title} | 状态: ${i.status} | 优先级: ${i.priority}${i.planEnd ? ' | 截止: ' + i.planEnd.slice(0,10) : ''}`
+                ).join('\n'));
+            }
+          }
+        }
+      } catch {}
+    }
+
+    // 模式2: "列出所有P0缺陷" / "高风险项目"
+    if (command.includes('P0') || command.includes('P1')) {
+      try {
+        const { prisma } = await import('../db');
+        const items = await prisma.workItem.findMany({
+          where: { priority: command.includes('P0') ? 'P0' : 'P1' },
+          select: { key: true, type: true, title: true, status: true, assignee: true, planEnd: true },
+          orderBy: { updatedAt: 'desc' },
+        });
+        if (items.length > 0) {
+          preQueryResults.push(`## ${command.includes('P0') ? 'P0' : 'P1'} 工作项列表（共 ${items.length} 项）\n` +
+            items.map((i: any) =>
+              `- ${i.key} (${i.type}) ${i.title} | 状态: ${i.status} | 负责人: ${i.assignee || '未指派'}`
+            ).join('\n'));
+        }
+      } catch {}
+    }
+
+    // 模式3: "超期/延期的工作项"
+    if (command.match(/超期|延期|逾期/)) {
+      try {
+        const { prisma } = await import('../db');
+        const now = new Date();
+        const items = await prisma.workItem.findMany({
+          where: { planEnd: { lt: now }, status: { notIn: ['已完成', '已关闭', '已驳回', '已发布', '已验收'] } },
+          select: { key: true, type: true, title: true, status: true, assignee: true, planEnd: true },
+          orderBy: { planEnd: 'asc' },
+        });
+        if (items.length > 0) {
+          preQueryResults.push(`## 超期工作项（共 ${items.length} 项）\n` +
+            items.map((i: any) =>
+              `- ${i.key} (${i.type}) ${i.title} | 负责人: ${i.assignee || '未指派'} | 计划完成: ${(i.planEnd || '').slice(0,10)}`
+            ).join('\n'));
+        }
+      } catch {}
+    }
+
+    // 如果预查询拿到了数据，注入到 system prompt
+    let preQueryText = '';
+    if (preQueryResults.length > 0) {
+      preQueryText = '\n\n## 预查询结果（已为你自动查询了以下数据）\n' + preQueryResults.join('\n\n') +
+        '\n\n请基于以上真实数据回答用户问题。如果预查询结果已经覆盖了用户问题，直接使用这些数据回答，无需再调工具。';
+    }
 
     // 工具列表
     const tools = toolsToOpenAIFormat();
     const messages: any[] = [
       {
         role: 'system',
-        content: `${snapshot.text}\n\n你是一位 AVM 项目管理专家。你可以通过以下工具**查询和操作项目中的所有数据**，回答用户的任何问题：
+        content: `${snapshot.text}${preQueryText}\n\n你是一位 AVM 项目管理专家。你可以通过以下工具**查询和操作项目中的所有数据**，回答用户的任何问题：
 
 ## 数据查询能力（可自由组合）
 - **list_work_items**: 按类型/优先级/状态/负责人/关键词/项目/超期筛选工作项，支持多值
@@ -80,13 +183,10 @@ aiCommandRouter.post('/command', async (req, res) => {
 - **assign_iteration**: 将工作项分配到迭代
 
 ## 规则
-1. **先调用工具获取数据**。对于"列出XXX""查询XXX""谁负责XXX"这类问题，必须调工具获取真实数据，不能凭快照或记忆回答。
+1. **优先使用预查询结果**（如果有的话）回答，不要重复调工具。
 2. 统计类问题（如"有多少P0"、"超期几个"）可以直接用快照数据。
-3. 问题涉及具体数据时（如"列出P0缺陷"、"张三的工作项"），调用对应查询工具获取。
-4. **负责人姓名匹配**：数据库中的负责人姓名可能包含部门后缀，如"张三（研发一组）"。用户说"张三"时，用 assignee 参数模糊搜索即可匹配。同时对多个负责人用逗号分隔调用，或分别调多次。
-5. 回答时用中文，先说关键结论，再给详细数据。数据较多时分点列出。
-6. 数据中没有的字段明确说"数据中没有该信息"。
-7. 严禁编造任何数据。`,
+3. 数据中没有的字段明确说"数据中没有该信息"。
+4. 严禁编造任何数据。`,
       },
     ];
     if (context) {
@@ -126,8 +226,7 @@ aiCommandRouter.post('/command', async (req, res) => {
         temperature: 0.2,
         maxTokens: 1500,
         tools,
-        // 第一轮强制调工具（required），后续轮次 auto
-        tool_choice: i === 0 ? 'required' : 'auto',
+        tool_choice: 'auto',
       } as any, undefined as any);
       if (r.usage) {
         totalPromptTokens += r.usage.promptTokens || 0;
@@ -1216,4 +1315,68 @@ function generateReportMarkdown(opts: {
   lines.push('---');
   lines.push(`*本报告由 AVM 平台自动生成 · ${new Date().toLocaleString('zh-CN')}*`);
   return lines.join('\n');
+}
+
+// ========== 智能直答引擎 ==========
+// 常见查询不经过 LLM，直接查库并格式化返回，更可靠更快速
+async function tryDirectAnswer(command: string): Promise<string | null> {
+  const cmd = command.trim();
+
+  // 1. 按负责人查询工作项: "张三的工作项" "李四负责的任务" "列出张三和李四的工作"
+  const hasAssigneeQuery = cmd.includes('负责') || cmd.includes('工作') || cmd.includes('任务') ||
+    cmd.includes('缺陷') || cmd.includes('需求') || cmd.includes('谁');
+
+  if (hasAssigneeQuery) {
+    const allItems = await prisma.workItem.findMany({
+      where: { assignee: { not: null } },
+      select: { key: true, type: true, title: true, status: true, priority: true, assignee: true, planEnd: true },
+      orderBy: [{ assignee: 'asc' }, { priority: 'asc' }],
+    });
+    const byAssignee: Record<string, any[]> = {};
+    for (const i of allItems) {
+      const name = i.assignee || '未指派';
+      if (!byAssignee[name]) byAssignee[name] = [];
+      byAssignee[name].push(i);
+    }
+    // 提取用户提到的姓名：直接用 DB 中的 assignee 名单模糊匹配用户输入
+    const allAssigneeNames = await prisma.workItem.findMany({
+      where: { assignee: { not: null } },
+      distinct: ['assignee'],
+      select: { assignee: true },
+    });
+    const dbNames = allAssigneeNames.map(r => r.assignee).filter((n): n is string => !!n);
+    
+    // 看用户提问中包含哪些 DB 中的负责人名字（直接检查 DB 中的名字是否出现在用户提问中）
+    // 中文无空格分词困难，所以直接用 DB 姓名列表逐一检查
+    const matched: string[] = dbNames.filter(name => cmd.includes(name) || cmd.includes(name.slice(0, 2)));
+    // 如果没匹配到全名，再尝试用姓名的前 2 个字匹配
+    if (matched.length === 0) {
+      // DB 中姓名格式通常是"张三（研发一组）"，取前 2 字匹配用户输入
+      for (const name of dbNames) {
+        const shortName = name.slice(0, 2);
+        if (cmd.includes(shortName) && !matched.some(m => m.includes(shortName))) {
+          matched.push(name);
+        }
+      }
+    }
+
+    if (matched.length > 0) {
+      const lines: string[] = [];
+      lines.push(`## 工作项 — 按负责人列出\n`);
+      for (const name of matched) {
+        const items = byAssignee[name];
+        lines.push(`### ${name}（${items.length} 项）`);
+        for (const i of items) {
+          const typeLabel = { requirement: '需求', task: '任务', bug: '缺陷', release: '发布' }[i.type as string] || i.type;
+          const dueInfo = i.planEnd ? ` | 截止: ${(i.planEnd as string).slice(0, 10)}` : '';
+          lines.push(`- **${i.key}** ${i.title} | ${typeLabel} | ${i.status} | ${i.priority}${dueInfo}`);
+        }
+        lines.push('');
+      }
+      lines.push(`---\n📊 共列出 ${matched.reduce((s, n) => s + byAssignee[n].length, 0)} 项工作项。`);
+      return lines.join('\n');
+    }
+  }
+
+  return null; // 未匹配直答规则，走 LLM
 }
