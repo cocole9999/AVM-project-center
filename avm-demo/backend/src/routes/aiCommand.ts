@@ -80,12 +80,13 @@ aiCommandRouter.post('/command', async (req, res) => {
 - **assign_iteration**: 将工作项分配到迭代
 
 ## 规则
-1. **先理解用户意图**，选择合适的工具获取数据。可以一次调用多个工具并行查询。
-2. 项目快照中已有全量统计数据（类型/状态/优先级分布、超期数量、各负责人工作量），统计类问题优先使用快照数据，无需调工具。
-3. 问题涉及具体数据时（如"列出P0缺陷"），调用对应查询工具获取。
-4. 回答时用中文，先说关键结论，再给详细数据。数据较多时分点列出。
-5. 数据中没有的字段明确说"数据中没有该信息"。
-6. 严禁编造任何数据。`,
+1. **先调用工具获取数据**。对于"列出XXX""查询XXX""谁负责XXX"这类问题，必须调工具获取真实数据，不能凭快照或记忆回答。
+2. 统计类问题（如"有多少P0"、"超期几个"）可以直接用快照数据。
+3. 问题涉及具体数据时（如"列出P0缺陷"、"张三的工作项"），调用对应查询工具获取。
+4. **负责人姓名匹配**：数据库中的负责人姓名可能包含部门后缀，如"张三（研发一组）"。用户说"张三"时，用 assignee 参数模糊搜索即可匹配。同时对多个负责人用逗号分隔调用，或分别调多次。
+5. 回答时用中文，先说关键结论，再给详细数据。数据较多时分点列出。
+6. 数据中没有的字段明确说"数据中没有该信息"。
+7. 严禁编造任何数据。`,
       },
     ];
     if (context) {
@@ -111,7 +112,8 @@ aiCommandRouter.post('/command', async (req, res) => {
     }
     messages.push({ role: 'user', content: command });
 
-    // 循环：让 LLM 多次调工具直到得到最终回答
+    // ===== 预查询：先跑一轮工具获取数据 =====
+    // 用 LLM 跑第一轮工具调用，确保数据落地再回答
     const toolCalls: ToolCallRecord[] = [];
     let finalContent = '';
     let totalPromptTokens = 0;
@@ -124,7 +126,8 @@ aiCommandRouter.post('/command', async (req, res) => {
         temperature: 0.2,
         maxTokens: 1500,
         tools,
-        tool_choice: i === 0 ? 'auto' : 'auto',  // 一直允许 LLM 调工具
+        // 第一轮强制调工具（required），后续轮次 auto
+        tool_choice: i === 0 ? 'required' : 'auto',
       } as any, undefined as any);
       if (r.usage) {
         totalPromptTokens += r.usage.promptTokens || 0;
