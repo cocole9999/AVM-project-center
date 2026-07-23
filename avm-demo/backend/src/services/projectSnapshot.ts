@@ -50,7 +50,7 @@ export async function buildProjectSnapshot(): Promise<SnapshotResult> {
     prisma.customer.findMany({ orderBy: { code: 'asc' } }),
     prisma.carModel.findMany({ orderBy: { code: 'asc' } }),
     prisma.contact.findMany({ include: { customer: { select: { name: true, code: true } } }, orderBy: [{ customerId: 'asc' }, { role: 'asc' }] }),
-    prisma.workItem.findMany({ select: { id: true, status: true, priority: true, type: true, projectId: true, customerId: true, carModelId: true } }),
+    prisma.workItem.findMany({ select: { id: true, status: true, priority: true, type: true, projectId: true, customerId: true, assignee: true, planEnd: true } }),
   ]);
 
   // 工作项统计
@@ -58,11 +58,21 @@ export async function buildProjectSnapshot(): Promise<SnapshotResult> {
   const wiByPriority: Record<string, number> = {};
   const wiByProject: Record<string, number> = {};
   const wiByCustomer: Record<string, number> = {};
+  const wiByAssignee: Record<string, number> = {};
+  const wiByType: Record<string, number> = {};
+  let overdueCount = 0;
+  const now = new Date();
   for (const w of workItems) {
     wiByStatus[w.status] = (wiByStatus[w.status] || 0) + 1;
     wiByPriority[w.priority] = (wiByPriority[w.priority] || 0) + 1;
     if (w.projectId) wiByProject[w.projectId] = (wiByProject[w.projectId] || 0) + 1;
     if (w.customerId) wiByCustomer[w.customerId] = (wiByCustomer[w.customerId] || 0) + 1;
+    if (w.assignee) wiByAssignee[w.assignee] = (wiByAssignee[w.assignee] || 0) + 1;
+    wiByType[w.type] = (wiByType[w.type] || 0) + 1;
+    // 超期：有截止日且未完成
+    if (w.planEnd && new Date(w.planEnd) < now && !['已完成', '已关闭', '已驳回', '已发布', '已验收'].includes(w.status)) {
+      overdueCount++;
+    }
   }
 
   // ===== 文本拼接 =====
@@ -126,10 +136,19 @@ export async function buildProjectSnapshot(): Promise<SnapshotResult> {
 
   // 4. 工作项统计
   lines.push(`## 4. 工作项统计（共 ${workItems.length} 条）`);
+  const typeParts = Object.entries(wiByType).map(([k, v]) => `${k}=${v}`).join(' / ');
+  lines.push(`- 类型分布：${typeParts}`);
   const statusParts = Object.entries(wiByStatus).map(([k, v]) => `${k}=${v}`).join(' / ');
-  const prioParts = Object.entries(wiByPriority).map(([k, v]) => `${k}=${v}`).join(' / ');
   lines.push(`- 状态分布：${statusParts}`);
+  const prioParts = Object.entries(wiByPriority).map(([k, v]) => `${k}=${v}`).join(' / ');
   lines.push(`- 优先级分布：${prioParts}`);
+  lines.push(`- 超期项：${overdueCount} 条`);
+  // 按负责人分布（只列工作量最多的 5 人）
+  const topAssignees = Object.entries(wiByAssignee).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  if (topAssignees.length > 0) {
+    const assigneeParts = topAssignees.map(([k, v]) => `${k}=${v}项`).join(' / ');
+    lines.push(`- 负责人分布（Top 5）：${assigneeParts}`);
+  }
   lines.push('');
 
   lines.push('【快照结束】请基于以上真实数据回答用户问题。如果数据中没有答案，明确说"数据中没有 X 信息"，不要编造。');

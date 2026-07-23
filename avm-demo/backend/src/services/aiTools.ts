@@ -262,25 +262,32 @@ const updateWorkItem: ToolDefinition = {
 // ========== 工具 6: 列出工作项 ==========
 const listWorkItems: ToolDefinition = {
   name: 'list_work_items',
-  description: '列出/查询工作项。可按 type/priority/status/project/assignee 过滤。常用于"列出所有 P0 缺陷"等。',
+  description: '查询工作项列表。可按类型/优先级/状态/项目/负责人/关键词等多种条件筛选。适合回答"有哪些P0缺陷""列出某个项目的需求""我的任务有哪些"等。返回标题/编号/状态/负责人/优先级/起止日期等。',
   parameters: {
     type: 'object',
     properties: {
-      type: { type: 'string', description: '类型：requirement / task / bug / release' },
-      priority: { type: 'string', description: '优先级：P0/P1/P2/P3' },
-      status: { type: 'string', description: '状态名（如 待领取/已完成）' },
-      projectCode: { type: 'string', description: '按项目编码过滤' },
-      assignee: { type: 'string', description: '按负责人过滤' },
-      keyword: { type: 'string', description: '按标题/编号搜索' },
-      limit: { type: 'number', description: '返回数量上限，默认 20' },
+      type: { type: 'string', description: '类型：requirement（需求）/ task（任务）/ bug（缺陷）/ release（发布）' },
+      priority: { type: 'string', description: '优先级：P0/P1/P2/P3，多个用逗号分隔' },
+      status: { type: 'string', description: '状态名（如 待领取/已完成/开发中），多个用逗号分隔' },
+      projectCode: { type: 'string', description: '按项目编码过滤（如 AVM-GALAXY-L7-2026）' },
+      assignee: { type: 'string', description: '按负责人姓名过滤' },
+      keyword: { type: 'string', description: '按标题/编号模糊搜索' },
+      isOverdue: { type: 'boolean', description: 'true=只看已超期的（planEnd < today 且未完成）' },
+      limit: { type: 'number', description: '返回数量上限，默认 20，最多 50' },
     },
   },
   handler: async (args) => {
     const where: any = {};
     if (args.type) where.type = args.type;
-    if (args.priority) where.priority = args.priority;
-    if (args.status) where.status = args.status;
-    if (args.assignee) where.assignee = args.assignee;
+    if (args.priority) {
+      const priorities = args.priority.split(',').map((s: string) => s.trim());
+      where.priority = priorities.length === 1 ? priorities[0] : { in: priorities };
+    }
+    if (args.status) {
+      const statuses = args.status.split(',').map((s: string) => s.trim());
+      where.status = statuses.length === 1 ? statuses[0] : { in: statuses };
+    }
+    if (args.assignee) where.assignee = { contains: args.assignee };
     if (args.projectCode) {
       const p = await prisma.project.findUnique({ where: { code: args.projectCode } });
       if (p) where.projectId = p.id;
@@ -291,13 +298,19 @@ const listWorkItems: ToolDefinition = {
         { key: { contains: args.keyword } },
       ];
     }
+    if (args.isOverdue) {
+      const now = new Date();
+      where.planEnd = { lt: now };
+      where.status = { notIn: ['已完成', '已关闭', '已驳回', '已发布', '已验收'] };
+    }
     const list = await prisma.workItem.findMany({
-      where, take: Math.min(args.limit || 20, 50), orderBy: { createdAt: 'desc' },
+      where, take: Math.min(args.limit || 20, 50), orderBy: [{ priority: 'asc' }, { updatedAt: 'desc' }],
     });
     return list.map(i => ({
       key: i.key, type: i.type, title: i.title,
       priority: i.priority, status: i.status, assignee: i.assignee,
-      projectId: i.projectId, dueDate: i.dueDate,
+      projectId: i.projectId, estimate: i.estimate, actualHours: i.actualHours,
+      planStart: i.planStart, planEnd: i.planEnd,
     }));
   },
 };
