@@ -50,9 +50,8 @@ aiCommandRouter.post('/command', async (req, res) => {
 
     // ===== 智能直答：常见查询模式直接处理，不经过 LLM =====
     // 某些模型（如 DeepSeek V4 Flash）的 function calling 不稳定，
-    // 查询工作项直接查库并格式化返回，更可靠更快速。
+    // 按负责人查工作项直接查库并格式化返回，不依赖 LLM。
     const cmdTrimmed = command.trim();
-    console.warn('[AI-DEBUG] command=', JSON.stringify(command), 'has工作=', cmdTrimmed.includes('工作'));
     const hasAssigneeQ = cmdTrimmed.includes('负责') || cmdTrimmed.includes('工作') || 
       cmdTrimmed.includes('任务') || cmdTrimmed.includes('缺陷') || cmdTrimmed.includes('需求');
     if (hasAssigneeQ) {
