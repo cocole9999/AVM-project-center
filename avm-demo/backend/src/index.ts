@@ -1,5 +1,10 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import http from 'http';
+import crypto from 'crypto';
+import path from 'path';
+import fs from 'fs';
 import { workItemRouter } from './routes/workItems';
 import { iterationRouter } from './routes/iterations';
 import { commentRouter } from './routes/comments';
@@ -38,15 +43,28 @@ import { exportRouter } from './routes/export';
 import { dependencyRouter } from './routes/dependencies';
 import { startRiskScanner } from './services/riskScanner';
 import { requireAuth } from './middleware/auth';
+import { prisma } from './db';
 import { auditLogRouter } from './routes/auditLogs';
 import { mentionRouter } from './routes/mentions';
 import { uploadRouter } from './routes/uploads';
 import { attachWsServer, getStats, pushToUser, broadcastAll, pushToRole } from './services/wsServer';
-import http from 'http';
-import crypto from 'crypto';
+import { apiLimiter, loginLimiter } from './middleware/rateLimiter';
+import { env } from './env';
+import { logger, logMeta } from './logger';
+import { swaggerSpec } from './swagger';
+import swaggerUi from 'swagger-ui-express';
+import { metricsMiddleware, getMetricsText } from './metrics';
+import promClient from 'prom-client';
 
 const app = express();
-const PORT = Number(process.env.PORT) || 4000;
+const PORT = env.PORT;
+const IS_PROD = env.NODE_ENV === 'production';
+
+// 安全 HTTP 头
+app.use(helmet({ contentSecurityPolicy: IS_PROD ? undefined : false }));
+
+// CORS：生产模式限制来源
+app.use(cors(IS_PROD ? { origin: process.env.CORS_ORIGIN || 'http://localhost:8080' } : {}));
 
 // 请求 ID 追踪
 app.use((req: any, _res, next) => {
@@ -54,18 +72,45 @@ app.use((req: any, _res, next) => {
   next();
 });
 
-app.use(cors());
+// 全局 API 限流
+app.use('/api', apiLimiter);
+
+// Prometheus 指标中间件
+app.use(metricsMiddleware);
+
 app.use(express.json({ limit: '10mb' }));
-// V1.23 静态文件服务 - 评论图片
-import * as path from 'path';
-import * as fs from 'fs';
+
+// 静态文件服务 - 评论图片
 const UPLOAD_DIR = path.join(process.cwd(), 'uploads');
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 app.use('/uploads', express.static(UPLOAD_DIR));
 
 // 健康检查（不走 requireAuth）
-app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', ts: new Date().toISOString() });
+app.get('/api/health', async (_req, res) => {
+  const startTime = Date.now();
+  let dbStatus = 'ok';
+  try {
+    await prisma.$queryRawUnsafe('SELECT 1');
+  } catch {
+    dbStatus = 'error';
+  }
+  res.json({
+    status: dbStatus === 'ok' ? 'ok' : 'degraded',
+    version: '1.2.0',
+    uptime: Math.floor(process.uptime()),
+    db: dbStatus,
+    ts: new Date().toISOString(),
+  });
+});
+
+// Swagger API 文档
+app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+app.get('/api/docs.json', (_req, res) => res.json(swaggerSpec));
+
+// Prometheus 指标（不走 requireAuth）
+app.get('/api/metrics', async (_req, res) => {
+  res.set('Content-Type', promClient.register.contentType);
+  res.end(await getMetricsText());
 });
 
 // V1.11: 全局鉴权（在所有 /api/* router 之前）
@@ -87,7 +132,7 @@ app.use('/api/ai', aiRouter);
 app.use('/api/ai-command', aiCommandRouter);
 app.use('/api/export', exportRouter);
 app.use('/api/dependencies', dependencyRouter);
-app.use('/api/users', userRouter);
+app.use('/api/users', loginLimiter, userRouter);
 app.use('/api/spaces', spaceRouter);
 app.use('/api/notifications', notificationRouter);
 app.use('/api/favorites', favoriteRouter);
@@ -146,7 +191,7 @@ app.use((err: any, req: any, res: any, _next: any) => {
       field: e.path.join('.'),
       message: e.message,
     }));
-    console.error(`[${requestId}] Zod Validation Error:`, JSON.stringify(details));
+    logger.warn('请求参数校验失败', logMeta(req, { details }));
     return res.status(400).json({
       error: '请求参数校验失败',
       details,
@@ -157,24 +202,24 @@ app.use((err: any, req: any, res: any, _next: any) => {
   // Prisma 错误
   if (err.code?.startsWith('P')) {
     const { status, message } = handlePrismaError(err);
-    console.error(`[${requestId}] Prisma Error [${err.code}]:`, err.message);
+    logger.error(`数据库错误 [${err.code}]`, logMeta(req, { message: err.message }));
     return res.status(status).json({ error: message, code: err.code, requestId });
   }
 
   // 已知 HTTP 错误 (有 status 属性)
   if (err.status && err.message) {
-    console.error(`[${requestId}] HTTP Error [${err.status}]:`, err.message);
+    logger.error(`HTTP ${err.status}`, logMeta(req, { message: err.message }));
     return res.status(err.status).json({ error: err.message, requestId });
   }
 
   // JSON 解析错误
   if (err.type === 'entity.parse.failed') {
-    console.error(`[${requestId}] JSON Parse Error:`, err.message);
+    logger.warn('JSON 解析失败', logMeta(req));
     return res.status(400).json({ error: '请求体 JSON 格式无效', requestId });
   }
 
   // 未知错误
-  console.error(`[${requestId}] UNHANDLED ERROR:`, err.stack || err);
+  logger.error('未处理的服务器错误', logMeta(req, { stack: err.stack }));
   res.status(500).json({
     error: '服务器内部错误',
     requestId,
@@ -182,19 +227,14 @@ app.use((err: any, req: any, res: any, _next: any) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 AVM Backend listening at http://localhost:${PORT}`);
-  console.log(`   Health: http://localhost:${PORT}/api/health`);
-  console.log(`   WS:     ws://localhost:${PORT + 1}/api/ws?token=xxx`);
-  console.log(`   Modules: work-items, iterations, flows, reviews, charts, dashboards, ai, ai-command, users, spaces, notifications, favorites, resources, search, workbench, fields, templates, automation, webhooks, imports, handover, tree`);
-
-  // 启动 AI 风险扫描定时任务（启动 60s 后跑首次，然后每 1 小时）
+  logger.info(`AVM Backend 启动`, { port: PORT, env: env.NODE_ENV, wsPort: PORT + 1 });
   startRiskScanner();
 });
 
 // V1.15: WebSocket 实时通知
 const httpServer = http.createServer(app);
 httpServer.listen(PORT + 1, () => {
-  console.log(`🔌 AVM WebSocket listening at ws://localhost:${PORT + 1}/api/ws`);
+  logger.info(`WebSocket 启动`, { port: PORT + 1 });
 });
 attachWsServer(httpServer, '/api/ws');
 

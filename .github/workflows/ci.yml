@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  backend:
+    name: Backend Test & Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: avm-demo/backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: avm-demo/backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prisma generate
+        run: npx prisma generate
+
+      - name: Run tests
+        run: npm test
+
+      - name: Check TypeScript
+        run: npx tsc --noEmit
+
+  frontend:
+    name: Frontend Test & Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: avm-demo/frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: avm-demo/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Check TypeScript
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build

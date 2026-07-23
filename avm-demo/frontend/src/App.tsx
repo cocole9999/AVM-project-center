@@ -1,10 +1,10 @@
 ﻿import { useEffect, useState } from 'react';
-import { Layout, Menu, theme, Badge, Avatar, Tag, Input, AutoComplete, Dropdown, Space, List, Empty, Button, message, notification as antdNotification, Tooltip, Modal } from 'antd';
+import { Layout, Menu, theme, Badge, Avatar, Tag, AutoComplete, Dropdown, Space, List, Empty, Button, message, notification as antdNotification, Tooltip, Modal } from 'antd';
 import {
   AppstoreOutlined, TableOutlined, ProjectOutlined, BarChartOutlined,
   SettingOutlined, BellOutlined, UserOutlined, TeamOutlined, RocketOutlined,
   PartitionOutlined, AuditOutlined, FundProjectionScreenOutlined, RobotOutlined,
-  AppstoreAddOutlined, ScheduleOutlined, StarOutlined, StarFilled, SearchOutlined,
+  AppstoreAddOutlined, ScheduleOutlined, StarOutlined, StarFilled,
   ApartmentOutlined, FunctionOutlined, ThunderboltOutlined, CalculatorOutlined, ApiOutlined, FileExcelOutlined, FileTextOutlined, SwapOutlined, ToolOutlined, ProfileOutlined, LineChartOutlined, CameraOutlined, BulbOutlined, ExperimentOutlined, HeartOutlined, BankOutlined, CarOutlined, ShopOutlined, ProjectOutlined as ProjectIcon, ImportOutlined,
   CheckOutlined, FireOutlined, LogoutOutlined, CalendarOutlined, SmileOutlined, WifiOutlined, DisconnectOutlined,
 } from '@ant-design/icons';
@@ -470,14 +470,9 @@ export default function App() {
               style={{ width: 280 }}
               value={searchQ}
               onChange={handleSearch}
-              placeholder="搜索工作项/迭代/图表/人员..."
+              placeholder="🔍 搜索工作项/迭代/图表/人员..."
               allowClear
-            >
-              <Input
-                prefix={<SearchOutlined style={{ color: '#999' }} />}
-                size="middle"
-              />
-            </AutoComplete>
+            />
             {searchResults.length > 0 && (
               <div style={{ position: 'absolute', top: 56, right: 320, zIndex: 1000, background: '#fff', borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.15)', width: 480, maxHeight: 480, overflow: 'auto' }}>
                 <List

@@ -4,6 +4,7 @@ import { STATUS_BY_TYPE, TYPE_OPTIONS } from '../constants';
 import { initWorkItemNode } from '../services/flowEngine';
 import { requireAuth, autoRole } from '../middleware/auth';
 import { recordAudit, actorFromReq } from '../utils/audit';
+import { withTenant } from '../middleware/tenant';
 
 export const workItemRouter = Router();
 
@@ -23,12 +24,13 @@ async function nextKey(type: string): Promise<string> {
 }
 
 // GET /api/work-items - 列表查�??（支持筛选）
-workItemRouter.get('/', async (req, res) => {
+workItemRouter.get('/', withTenant, async (req, res) => {
   const {
     type, status, priority, assignee, iterationId, q, parentId, module,
   } = req.query as Record<string, string | undefined>;
 
   const where: any = {};
+  if (req.tenantId) where.tenantId = req.tenantId;
   if (type && type !== 'all') where.type = type;
   if (status) where.status = status;
   if (priority) where.priority = priority;

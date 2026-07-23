@@ -10,6 +10,7 @@ import { requireAuth, autoRole } from '../middleware/auth';
 import { recordAudit, actorFromReq, diffFields } from '../utils/audit';
 import { validate } from '../middleware/validate';
 import { createProjectSchema, updateProjectSchema } from '../schemas/project';
+import { withTenant } from '../middleware/tenant';
 
 export const projectRouter = Router();
 

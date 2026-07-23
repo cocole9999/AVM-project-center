@@ -35,6 +35,7 @@ model WorkItem {
   projectId      String?
   carModelId     String?
   customerId     String?
+  tenantId       String?           // Phase3 多租户隔离
   createdAt     DateTime           @default(now())
   updatedAt     DateTime           @updatedAt
   comments      Comment[]
@@ -63,6 +64,7 @@ model WorkItem {
   // V1.10 甘特图范围查询
   @@index([planStart, planEnd])
   @@index([projectId, planStart])
+  @@index([tenantId])
 }
 
 model WorkItemRelation {
@@ -85,6 +87,7 @@ model Iteration {
   startDate DateTime
   endDate   DateTime
   spaceId   String?
+  tenantId  String?    // Phase3 多租户隔离
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
   space     Space?     @relation(fields: [spaceId], references: [id])
@@ -329,6 +332,7 @@ model User {
   role          String    @default("member")
   active        Boolean   @default(true)
   token         String?   // V1.11 登录 token (32 字节 hex)
+  tokenExpiresAt DateTime? // Phase2 token 过期时间
   tenantId      String?
   feishuOpenId  String?
   feishuUnionId String?
@@ -884,6 +888,7 @@ model Customer {
   address     String    @default("")
   description String    @default("")
   status      String    @default("active")
+  tenantId    String?   // Phase3 多租户隔离
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   contacts    Contact[]
@@ -904,6 +909,7 @@ model CarModel {
   platform    String    @default("")
   description String    @default("")
   status      String    @default("active")
+  tenantId    String?   // Phase3 多租户隔离
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   projects    Project[]
@@ -951,6 +957,7 @@ model Project {
   risk           String     @default("low")
   progress       Int        @default(0)
   tags           String     @default("")
+  tenantId       String?    // Phase3 多租户隔离
   createdBy      String?
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt

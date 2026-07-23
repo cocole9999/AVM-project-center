@@ -71,6 +71,10 @@ export async function requireAuth(req: AuthedRequest, res: Response, next: NextF
     // V1.11: token 是 index 不是 unique, findUnique 只能用 id/username
     const user = await prisma.user.findFirst({ where: { token } });
     if (user && user.active) {
+      // Phase2: 检查 token 过期
+      if (user.tokenExpiresAt && new Date(user.tokenExpiresAt) < new Date()) {
+        return res.status(401).json({ error: 'token 已过期，请重新登录' });
+      }
       req.user = {
         id: user.id, username: user.username, displayName: user.displayName,
         role: (user.role as Role) || 'member', department: user.department,

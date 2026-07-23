@@ -3,13 +3,20 @@ import { prisma } from '../db';
 import { caches } from '../cache';
 import { requireAuth, requireRole } from '../middleware/auth';
 import { recordAudit, diffFields } from '../utils/audit';
+import bcrypt from 'bcrypt';
 import crypto from 'crypto';
 
 export const userRouter = Router();
 
-// 简化的"密码哈希"（演示版，生产请用 bcrypt）
-function hashPassword(pwd: string): string {
-  return crypto.createHash('sha256').update(pwd + 'avm-salt').digest('hex');
+const BCRYPT_ROUNDS = 10;
+const TOKEN_EXPIRY_HOURS = 24;
+
+async function hashPassword(pwd: string): Promise<string> {
+  return bcrypt.hash(pwd, BCRYPT_ROUNDS);
+}
+
+async function verifyPassword(pwd: string, hash: string): Promise<boolean> {
+  return bcrypt.compare(pwd, hash);
 }
 
 userRouter.get('/', async (_req, res) => {
@@ -35,7 +42,7 @@ userRouter.post('/', requireRole('tenant_admin'), async (req: any, res) => {
         username,
         displayName: displayName || username,
         email: email || null,
-        password: hashPassword(password),
+        password: await hashPassword(password),
         department: department || null,
         role: role || 'member',
       },
@@ -57,7 +64,7 @@ userRouter.patch('/:id', requireRole('tenant_admin'), async (req: any, res) => {
     if (department !== undefined) data.department = department;
     if (role !== undefined) data.role = role;
     if (active !== undefined) data.active = active;
-    if (password) data.password = hashPassword(password);
+    if (password) data.password = await hashPassword(password);
     const before = await prisma.user.findUnique({ where: { id: req.params.id } });
     const u = await prisma.user.update({
       where: { id: req.params.id },
@@ -86,7 +93,7 @@ userRouter.delete('/:id', requireRole('tenant_admin'), async (req: any, res) => 
   res.status(204).end();
 });
 
-// 登录（演示版：返回用户信息和 token，token 存入 db 供后续 API 鉴权）
+// 登录
 userRouter.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -95,15 +102,17 @@ userRouter.post('/login', async (req, res) => {
       recordAudit('auth', null, 'login_failed', null, { ip: req.ip, method: 'POST', summary: `登录失败: ${username}` });
       return res.status(401).json({ error: '用户名或密码错误' });
     }
-    if (user.password !== hashPassword(password)) {
+    const valid = await verifyPassword(password, user.password);
+    if (!valid) {
       recordAudit('auth', user.id, 'login_failed', null, { ip: req.ip, method: 'POST', summary: `登录失败: ${username} 密码错` });
       return res.status(401).json({ error: '用户名或密码错误' });
     }
-    // V1.11: token 持久化到 db (支持多设备)
+    // 持久化 token + 24 小时过期
     const token = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + TOKEN_EXPIRY_HOURS * 3600 * 1000);
     await prisma.user.update({
       where: { id: user.id },
-      data: { token, lastLoginAt: new Date(), lastLoginIp: req.ip || null },
+      data: { token, tokenExpiresAt: expiresAt, lastLoginAt: new Date(), lastLoginIp: req.ip || null },
     });
     recordAudit('auth', user.id, 'login', null, { ip: req.ip, method: 'POST', summary: `${username} 登录` }, { username: user.username, role: user.role || 'member' });
     res.json({

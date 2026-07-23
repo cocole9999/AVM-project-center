@@ -199,7 +199,7 @@ export function GlobalAIAssistant() {
       <Badge count={messageCount} size="small" offset={[-8, 8]} color="#722ed1">
         <FloatButton
           type="primary"
-          icon={<RobotOutlined />}
+          icon={<span style={{ fontSize: 16, fontWeight: 700, letterSpacing: -0.5 }}>AI</span>}
           tooltip="AI 助理 (Ctrl+K)"
           style={{ right: 24, bottom: 24, width: 56, height: 56 }}
           onClick={() => setOpen(true)}
