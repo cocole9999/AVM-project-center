@@ -14,14 +14,14 @@ chartRouter.get('/', asyncHandler(async (req, res) => {
     orderBy: { position: 'asc' },
   });
   res.json(list);
-});
+}));
 
 // 获取图表
 chartRouter.get('/:id', asyncHandler(async (req, res) => {
   const c = await prisma.chartConfig.findUnique({ where: { id: req.params.id } });
   if (!c) return res.status(404).json({ error: 'Chart not found' });
   res.json(c);
-});
+}));
 
 // 创建图表
 chartRouter.post('/', async (req, res) => {
@@ -45,7 +45,7 @@ chartRouter.patch('/:id', async (req, res) => {
 chartRouter.delete('/:id', asyncHandler(async (req, res) => {
   await prisma.chartConfig.delete({ where: { id: req.params.id } });
   res.status(204).end();
-});
+}));
 
 // 计算图表数据（按维度 + 指标聚合）
 chartRouter.post('/:id/compute', async (req, res) => {

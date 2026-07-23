@@ -8,9 +8,10 @@
  * - 多轮对话记忆（sessionStorage 持久化 + 后端 history 注入）
  */
 import { useEffect, useState, useRef } from 'react';
-import { FloatButton, Drawer, Input, Button, Space, Tag, Spin, message as antdMessage, Avatar, Empty, Tooltip, Popconfirm, Badge } from 'antd';
+import { FloatButton, Drawer, Input, Button, Space, Tag, Spin, message as antdMessage, Avatar, Empty, Tooltip, Popconfirm, Badge, Select } from 'antd';
 import { RobotOutlined, SendOutlined, CloseOutlined, ThunderboltOutlined, ClearOutlined, HistoryOutlined } from '@ant-design/icons';
 import { useAuth } from '../AuthContext';
+import { llmSettingsApi, aiApi } from '../api';
 
 interface Message {
   id: string;
@@ -36,6 +37,21 @@ const MAX_CONTEXT = 12;     // 发给后端时最近 N 条
 
 function genId() {
   return `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// ========== LLM 状态管理 ==========
+interface LLMStatus {
+  provider: string;
+  model: string;
+  displayName: string;
+  available: boolean;
+  enabled: boolean;
+}
+
+interface ModelInfo {
+  id: string;
+  label: string;
+  builtin: boolean;
 }
 
 function loadHistory(user: string): Message[] {
@@ -95,6 +111,11 @@ export function GlobalAIAssistant() {
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // LLM 提供商/模型状态
+  const [llmStatus, setLlmStatus] = useState<{ provider: string; model: string; providers: string[] } | null>(null);
+  const [llmModels, setLlmModels] = useState<ModelInfo[]>([]);
+  const [llmProviderList, setLlmProviderList] = useState<string[]>([]);
+
   // 持久化（每次 messages 变化）
   useEffect(() => {
     saveHistory(username, messages);
@@ -114,7 +135,7 @@ export function GlobalAIAssistant() {
     return () => window.removeEventListener('keydown', onKey);
   }, [open]);
 
-  // 打开时拉建议
+  // 打开时拉建议 + LLM 状态
   useEffect(() => {
     if (open) {
       fetch(API + '/suggestions', {
@@ -125,8 +146,48 @@ export function GlobalAIAssistant() {
         .then(r => r.json())
         .then(d => setSuggestions(d.suggestions || []))
         .catch(() => setSuggestions([]));
+      // 拉 LLM 状态
+      aiApi.llmStatus().then((r: any) => {
+        if (r?.providers) {
+          setLlmProviderList(r.providers.map((p: any) => p.key));
+          if (r.provider) setLlmStatus({ provider: r.provider, model: r.model || '', providers: [] });
+          // 拉模型列表
+          if (r.provider && r.provider !== 'mock') {
+            llmSettingsApi.listModels(r.provider).then((mr: any) => {
+              setLlmModels([...(mr.builtin || []).map((id: string) => ({ id, label: id, builtin: true })),
+                           ...(mr.custom || []).map((id: string) => ({ id, label: id, builtin: false }))]);
+            }).catch(() => {});
+          }
+        }
+      }).catch(() => {});
     }
   }, [open]);
+
+  // 切换提供商
+  const switchProvider = async (provider: string) => {
+    try {
+      await llmSettingsApi.activateProvider(provider);
+      const r = await llmSettingsApi.listModels(provider);
+      setLlmModels([...(r.builtin || []).map((id: string) => ({ id, label: id, builtin: true })),
+                   ...(r.custom || []).map((id: string) => ({ id, label: id, builtin: false }))]);
+      setLlmStatus(s => ({ ...s!, provider }));
+      antdMessage.success(`已切换到 ${provider}`);
+    } catch (e: any) {
+      antdMessage.error('切换失败: ' + e.message);
+    }
+  };
+
+  // 切换模型
+  const switchModel = async (model: string) => {
+    if (!llmStatus?.provider) return;
+    try {
+      await llmSettingsApi.switchModel(llmStatus.provider, model);
+      setLlmStatus(s => ({ ...s!, model }));
+      antdMessage.success(`已切换到模型 ${model}`, 1);
+    } catch (e: any) {
+      antdMessage.error('切换失败: ' + e.message);
+    }
+  };
 
   // 滚动到底
   useEffect(() => {
@@ -209,16 +270,37 @@ export function GlobalAIAssistant() {
       {/* 命令面板（Drawer） */}
       <Drawer
         title={
-          <Space>
-            <RobotOutlined style={{ color: '#1677ff' }} />
-            <span>AVM 全局 AI 助理</span>
-            <Tag color="purple" style={{ marginLeft: 8 }}>Ctrl+K</Tag>
-            {messageCount > 1 && (
-              <Tag color="cyan" icon={<HistoryOutlined />}>
-                已聊 {messageCount} 轮
-              </Tag>
-            )}
-          </Space>
+          <div>
+            <Space>
+              <RobotOutlined style={{ color: '#1677ff' }} />
+              <span>AI 助理</span>
+              {llmStatus && (
+                <>
+                  <Select
+                    size="small"
+                    value={llmStatus.provider}
+                    onChange={switchProvider}
+                    style={{ minWidth: 100 }}
+                    options={llmProviderList.map(p => ({ value: p, label: p }))}
+                  />
+                  <Select
+                    size="small"
+                    value={llmStatus.model}
+                    onChange={switchModel}
+                    style={{ minWidth: 130 }}
+                    options={llmModels.map(m => ({ value: m.id, label: m.id }))}
+                    showSearch
+                  />
+                </>
+              )}
+              {!llmStatus && <Tag color="default">未配置</Tag>}
+              {messageCount > 1 && (
+                <Tag color="cyan" icon={<HistoryOutlined />} style={{ marginLeft: 4 }}>
+                  {messageCount} 轮
+                </Tag>
+              )}
+            </Space>
+          </div>
         }
         open={open}
         onClose={() => setOpen(false)}

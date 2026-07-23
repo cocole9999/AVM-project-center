@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../db';
 import { asyncHandler } from '../middleware/validate';
+import { withTenant } from '../middleware/tenant';
 
 export const iterationRouter = Router();
 

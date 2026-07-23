@@ -10,7 +10,7 @@ dashboardRouter.get('/', asyncHandler(async (_req, res) => {
     include: { _count: { select: { charts: true } } },
   });
   res.json(list);
-});
+}));
 
 dashboardRouter.get('/:id', asyncHandler(async (req, res) => {
   const d = await prisma.dashboard.findUnique({
@@ -19,7 +19,7 @@ dashboardRouter.get('/:id', asyncHandler(async (req, res) => {
   });
   if (!d) return res.status(404).json({ error: 'Dashboard not found' });
   res.json(d);
-});
+}));
 
 dashboardRouter.post('/', async (req, res) => {
   try {
@@ -39,7 +39,7 @@ dashboardRouter.patch('/:id', async (req, res) => {
   }
 });
 
-dashboardRouter.delete('/:id', async (req, res) => {
+dashboardRouter.delete('/:id', asyncHandler(async (req, res) => {
   await prisma.dashboard.delete({ where: { id: req.params.id } });
   res.status(204).end();
-});
+}));
