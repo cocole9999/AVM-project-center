@@ -261,10 +261,10 @@ async function getAllProviders(): Promise<ResolvedProvider[]> {
 
 export function clearLLMCache() { _cached = null; }
 
-// 列出某 provider 的全部可用模型（预置 + 用户自定义）
+// 列出某 provider 的全部可用模型（预置取前 3 个最新 + 自定义）
 export async function getAvailableModels(providerKey: string): Promise<{ builtin: string[]; custom: string[]; current: string; all: string[] }> {
   const meta = PROVIDERS.find(p => p.key === providerKey);
-  const builtin = meta?.models || [];
+  const builtin = (meta?.models || []).slice(0, 3); // 只列出前 3 个最新模型
   let custom: string[] = [];
   let current = '';
   try {
@@ -272,6 +272,10 @@ export async function getAvailableModels(providerKey: string): Promise<{ builtin
     if (s) {
       try { custom = JSON.parse(s.customModels || '[]'); } catch { custom = []; }
       current = s.currentModel || s.model || meta?.defaultModel || '';
+      // 如果当前模型不在内置前3且不在自定义中，自动加入自定义池
+      if (current && !builtin.includes(current) && !custom.includes(current)) {
+        custom = [current, ...custom];
+      }
     }
   } catch {}
   const all = Array.from(new Set([...builtin, ...custom]));
