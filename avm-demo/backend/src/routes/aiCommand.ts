@@ -84,7 +84,7 @@ aiCommandRouter.post('/command', async (req, res) => {
           aiLines.push(`### ${name}（${items.length} 项）`);
           for (const it of items) {
             const t = { requirement: '需求', task: '任务', bug: '缺陷', release: '发布' }[it.type as string] || it.type;
-            aiLines.push(`- **${it.key}** ${it.title} | ${t} | ${it.status} | ${it.priority}${it.planEnd ? ' | 截止: ' + (it.planEnd as string).slice(0,10) : ''}`);
+            aiLines.push(`- **${it.key}** ${it.title} | ${t} | ${it.status} | ${it.priority}${it.planEnd ? ' | 截止: ' + fmtDate(it.planEnd) : ''}`);
           }
           aiLines.push('');
         }
@@ -113,14 +113,14 @@ aiCommandRouter.post('/command', async (req, res) => {
       orderBy: { code: 'asc' },
     });
     const projText = allProjects.map(p =>
-      `- ${p.code} ${p.name} | 状态:${p.status} | 风险:${p.risk} | 进度:${p.progress}% | 合同:${(p.contractAmount/10000).toFixed(1)}万 | ${(p.startDate+"").slice(0,10)}~${(p.endDate+"").slice(0,10)}`
+      `- ${p.code} ${p.name} | 状态:${p.status} | 风险:${p.risk} | 进度:${p.progress}% | 合同:${(p.contractAmount/10000).toFixed(1)}万 | ${fmtDate(p.startDate)}~${fmtDate(p.endDate)}`
     ).join('\n');
 
     // 3. 工作项文本
     const wiText = allWis.map(w => {
       const typeLabel = { requirement: '需求', task: '任务', bug: '缺陷', release: '发布' }[w.type] || w.type;
       const assignee = w.assignee || '未指派';
-      return `- ${w.key} [${typeLabel}] ${w.title} | 状态:${w.status} | 优先级:${w.priority} | 负责人:${assignee}${w.planEnd ? ' | 截止:' + (w.planEnd+"").slice(0,10) : ''}`;
+      return `- ${w.key} [${typeLabel}] ${w.title} | 状态:${w.status} | 优先级:${w.priority} | 负责人:${assignee}${w.planEnd ? ' | 截止:' + fmtDate(w.planEnd) : ''}`;
     }).join('\n');
 
     // 4. 迭代
@@ -131,7 +131,7 @@ aiCommandRouter.post('/command', async (req, res) => {
     });
     const iterText = allIters.map(i => {
       const total = allWis.filter(w => w.iterationId === i.id).length;
-      return `- ${i.name} | 状态:${i.status} | ${(i.startDate+"").slice(0,10)}~${(i.endDate+"").slice(0,10)} | 工作项:${total}`;
+      return `- ${i.name} | 状态:${i.status} | ${fmtDate(i.startDate)}~${fmtDate(i.endDate)} | 工作项:${total}`;
     }).join('\n');
 
     // 5. 统计
@@ -313,7 +313,12 @@ function generateReportMarkdown(opts: {
   return lines.join('\n');
 }
 
-// ========== 智能直答引擎 ==========
+// 日期格式化辅助
+function fmtDate(d: Date | string | null | undefined): string {
+  if (!d) return '-';
+  const dt = typeof d === 'string' ? new Date(d) : d;
+  return dt.toISOString().slice(0, 10);
+}
 // 常见查询不经过 LLM，直接查库并格式化返回，更可靠更快速
 async function tryDirectAnswer(command: string): Promise<string | null> {
   const cmd = command.trim();
