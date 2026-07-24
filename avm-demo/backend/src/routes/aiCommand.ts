@@ -48,56 +48,7 @@ aiCommandRouter.post('/command', async (req, res) => {
       return res.status(400).json({ error: 'LLM 未配置，请先在 LLM 设置里配置 API Key' });
     }
 
-    // ===== 智能直答：仅按人名查工作项时绕过 LLM =====
-    // 识别 "张三的工��" "李四负责的任务" 这类查询，直接查库返回
-    const cmdTrimmed = command.trim();
-    // 检查是否包含常见人名用字（姓氏 + 名字）
-    const hasChineseName = /[\u4e00-\u9fa5]{2,3}(?:的|负责|工作|任务|缺陷)/.test(cmdTrimmed);
-    if (hasChineseName) {
-      const aiDbNames = await prisma.workItem.findMany({
-        where: { assignee: { not: null } },
-        distinct: ['assignee'],
-        select: { assignee: true },
-      });
-      const aiNameList = aiDbNames.map(r => r.assignee).filter((n): n is string => !!n);
-      const aiMatched = aiNameList.filter(n => {
-        const s = n.slice(0, 2);
-        return s.length >= 2 && cmdTrimmed.includes(s);
-      });
-      if (aiMatched.length > 0) {
-        const aiAllItems = await prisma.workItem.findMany({
-          where: { assignee: { not: null } },
-          select: { key: true, type: true, title: true, status: true, priority: true, assignee: true, planEnd: true },
-          orderBy: [{ assignee: 'asc' }, { priority: 'asc' }],
-        });
-        const aiByPerson: Record<string, any[]> = {};
-        for (const it of aiAllItems) {
-          const n = it.assignee || '未指派';
-          if (!aiByPerson[n]) aiByPerson[n] = [];
-          aiByPerson[n].push(it);
-        }
-        const aiLines: string[] = [];
-        aiLines.push(`## 工作项 — 按负责人列出\n`);
-        for (const name of aiMatched) {
-          const items = aiByPerson[name] || [];
-          aiLines.push(`### ${name}（${items.length} 项）`);
-          for (const it of items) {
-            const t = { requirement: '需求', task: '任务', bug: '缺陷', release: '发布' }[it.type as string] || it.type;
-            aiLines.push(`- **${it.key}** ${it.title} | ${t} | ${it.status} | ${it.priority}${it.planEnd ? ' | 截止: ' + fmtDate(it.planEnd) : ''}`);
-          }
-          aiLines.push('');
-        }
-        aiLines.push(`---\n📊 共列出 ${aiMatched.reduce((s, n) => s + (aiByPerson[n] || []).length, 0)} 项工作项。`);
-        return res.json({
-          ok: true, command,
-          reply: aiLines.join('\n'), toolCalls: [],
-          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
-          llmModel: 'rule-engine', provider: 'rule-engine',
-        });
-      }
-    }
-
-    // ===== LLM 路径：注入全量数据让 LLM 直接回答 =====
+    // ===== LLM 路径：注入全量数据让 LLM 回答 =====
     // 不依赖 function calling（DeepSeek 等模型不支持或不稳定）
 
     // 1. 拉所有工作项
