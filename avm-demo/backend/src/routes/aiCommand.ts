@@ -48,13 +48,12 @@ aiCommandRouter.post('/command', async (req, res) => {
       return res.status(400).json({ error: 'LLM 未配置，请先在 LLM 设置里配置 API Key' });
     }
 
-    // ===== 智能直答：绕过 LLM 直接处理常见查询 =====
-    // 某些模型（如 DeepSeek V4 Flash）的 function calling 不稳定，
-    // 直接查库返回，不依赖 LLM。
+    // ===== 智能直答：仅按人名查工作项时绕过 LLM =====
+    // 识别 "张三的工��" "李四负责的任务" 这类查询，直接查库返回
     const cmdTrimmed = command.trim();
-    const hasAssigneeQ = cmdTrimmed.includes('负责') || cmdTrimmed.includes('工作') || 
-      cmdTrimmed.includes('任务') || cmdTrimmed.includes('缺陷') || cmdTrimmed.includes('需求');
-    if (hasAssigneeQ) {
+    // 检查是否包含常见人名用字（姓氏 + 名字）
+    const hasChineseName = /[\u4e00-\u9fa5]{2,3}(?:的|负责|工作|任务|缺陷)/.test(cmdTrimmed);
+    if (hasChineseName) {
       const aiDbNames = await prisma.workItem.findMany({
         where: { assignee: { not: null } },
         distinct: ['assignee'],
@@ -151,7 +150,19 @@ aiCommandRouter.post('/command', async (req, res) => {
     const dataDump = `## 项目数据（共${allProjects.length} 个）\n${projText}\n\n## 工作项数据（共 ${allWis.length} 项）\n${wiText}\n\n## 迭代/冲刺\n${iterText}\n\n## 统计数据\n- 状态分布: ${Object.entries(byStatus).map(([k,v]) => `${k}=${v}`).join(' / ')}\n- 优先级分布: ${Object.entries(byPrio).map(([k,v]) => `${k}=${v}`).join(' / ')}\n- 负责人分布(Top5): ${assigneeTop}\n- 超期项: ${overdue.length} 项`;
 
     const llmMessages: any[] = [
-      { role: 'system', content: `你是一位 AVM 项目助理。以下是你需要知道的全部数据:\n\n${dataDump}\n\n请根据以上数据回答用户的问题。如果数据中没有答案，就说"数据中没有该信息"。不要编造。` },
+      { role: 'system', content: `你是一位 AVM 项目管理助理。以下是系统中所有真实数据，请基于这些数据回答用户的问题：
+
+${dataDump}
+
+回答规则：
+1. 用中文回答，语言简洁明了。
+2. 如果要列出多项，用表格或分点形式，清晰易读。
+3. 如果用户问的是统计类问题（数量、分布等），直接给出统计数字。
+4. 如果用户问具体工作项或项目，列出匹配项及其关键字段（状态、负责人、优先级、截止日等）。
+5. 如果用户问某个人的工作项，列出该人负责的所有项。
+6. 你可以根据已有数据做合理推断（比如根据状态判断进度、根据截止日判断是否超期等）。
+7. 只有在数据中完全找不到相关信息时，才说"数据中没有该信息"。
+8. 不要编造任何数据。` },
     ];
     if (Array.isArray(history) && history.length > 0) {
       const trimmed = history.slice(-10).filter(m => ['user', 'assistant'].includes(m.role));
